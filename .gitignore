@@ -1,0 +1,51 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments & tooling
+.venv/
+venv/
+env/
+.env/
+.pytest_cache/
+.mypy_cache/
+.vscode/
+.idea/
+.vs/
+
+# Build / dist artifacts
+build/
+dist/
+*.egg-info/
+*.spec
+
+# Logs and runtime state
+logs/
+*.log
+py.ini
+AA更新日志.txt.bak
+
+# Generated assets & downloads
+resc/models/
+resc/gsvmove_update/
+resc/user/
+resc/VFX/cache/
+config/.shared_pending/
+*.zip
+*.7z
+*.tar
+*.gz
+*.tmp
+*.part
+*.bak
+
+# OS noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Release outputs
+FlyingSnowVelvet-*.zip

@@ -1,0 +1,25 @@
+Flying Snow Velvet Assets License
+=================================
+
+Scope
+-----
+- Applies to all non-code materials inside this repository, including but not limited to: audio files, fonts, GIF/PNG/WebP artwork, UI images, persona text, sponsorship graphics, documentation screenshots, and any files located under `resc/`, `doc/贡献名单和主播的狗盆/`, or other media folders not covered by Apache License 2.0.
+- Source code (Python, scripts, configuration modules) is licensed separately under Apache License 2.0; see `LICENSE-CODE`.
+
+Grant
+-----
+- You may use the bundled assets solely for running, evaluating, or showcasing the Flying Snow Velvet desktop pet.
+- Redistribution of the assets (stand‑alone or embedded in other products) is prohibited without prior written permission from the copyright holders.
+- You may not sell, sublicense, or claim ownership of the assets.
+- Derivative works that include these assets must remain private unless you obtain approval for public distribution.
+
+Trademarks / Attribution
+------------------------
+- The project name “飞行雪绒 / Flying Snow Velvet” and any associated logos remain the property of the original author(s).
+- Do not remove existing attribution notices in documentation or UI when showcasing the project.
+
+Requests
+--------
+- For commercial usage, livestream overlays, or redistribution inquiries, please contact the maintainers via the official support channels (fan group / 工单) referenced in the documentation.
+
+By using the repository you agree to the above terms for all non-code resources.

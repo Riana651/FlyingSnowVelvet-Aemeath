@@ -1,0 +1,14 @@
+comtypes>=1.1.11
+musicdl>=1.4.6
+mutagen>=1.47.0
+packaging>=23.2
+Pillow>=10.2.0
+pygame>=2.5.2
+pyncm>=1.7.5
+pycaw>=20181226
+PyQt5>=5.15.10
+pywin32>=306
+qrcode>=7.4.2
+requests>=2.31.0
+sounddevice>=0.4.6
+vosk>=0.3.45

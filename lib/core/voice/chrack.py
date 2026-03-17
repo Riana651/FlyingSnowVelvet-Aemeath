@@ -1,0 +1,20 @@
+"""chrack 音频类。"""
+
+import os
+
+from lib.core.logger import get_logger
+from lib.core.voice.random_sound import DirectoryRandomSound
+
+_logger = get_logger(__name__)
+
+
+class ChrackSound(DirectoryRandomSound):
+    def __init__(self, interruptible: bool = True):
+        super().__init__(
+            sound_dir=os.path.join('resc', 'SOUND', 'chrack'),
+            audio_class='chrack',
+            logger=_logger,
+            log_name='ChrackSound',
+            volume_range=(0.30, 0.50),
+            interruptible=interruptible,
+        )

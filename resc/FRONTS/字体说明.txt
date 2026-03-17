@@ -1,0 +1,4 @@
+HarmonyOS_Sans_SC_Bold--鸿蒙字体-默认字体
+WuWa Lahai-Roi Regular--拉海洛英文-数字
+WuWaJitingHandwriting-Regular--煌珑英文
+WuWaSolarisDigitalTube-Regular--煌珑数字

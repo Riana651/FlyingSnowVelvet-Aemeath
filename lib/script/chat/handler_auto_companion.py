@@ -1,0 +1,118 @@
+"""ChatHandler ???????"""
+
+import random
+
+from PyQt5.QtCore import QTimer
+
+from config.ollama_config import AUTO_COMPANION
+from lib.core.event.center import Event
+from lib.core.logger import get_logger
+from .vision_capture import capture_screen
+
+logger = get_logger(__name__)
+
+AUTO_COMPANION_BASELINE_INTERVAL_MS = (120000, 360000)
+AUTO_COMPANION_PROMPT = '(仔细观察屏幕,然后简要分析漂泊者现在在做什么呢?)'
+
+
+def _resolve_auto_companion_interval(interval_value) -> tuple[int, int]:
+    """
+    自动陪伴间隔兜底：
+    - 以当前默认配置作为硬编码基线
+    - 仅允许上调，不允许下调
+    """
+    base_min, base_max = AUTO_COMPANION_BASELINE_INTERVAL_MS
+    resolved_min, resolved_max = base_min, base_max
+
+    if isinstance(interval_value, (list, tuple)) and len(interval_value) >= 2:
+        try:
+            cfg_min = int(interval_value[0])
+            cfg_max = int(interval_value[1])
+            resolved_min = max(cfg_min, base_min)
+            resolved_max = max(cfg_max, base_max)
+            if resolved_max < resolved_min:
+                resolved_max = resolved_min
+        except (TypeError, ValueError):
+            pass
+
+    if (resolved_min, resolved_max) != (base_min, base_max):
+        logger.info(
+            "[ChatHandler] 自动陪伴间隔已应用上调配置（基线 %d~%d ms -> 生效 %d~%d ms）",
+            base_min,
+            base_max,
+            resolved_min,
+            resolved_max,
+        )
+    return resolved_min, resolved_max
+
+AUTO_COMPANION_INTERVAL_MS = _resolve_auto_companion_interval(AUTO_COMPANION.get('interval_ms'))
+
+def _is_auto_companion_enabled() -> bool:
+    return bool(AUTO_COMPANION.get('enabled', True))
+
+
+
+class ChatHandlerAutoCompanionMixin:
+    def _on_app_main(self, event: Event):
+        """应用主循环就绪后，启动自动陪伴轮询（仅外部 API 模式）。"""
+        if not self._ollama.use_api_key_mode:
+            logger.info("[ChatHandler] 当前非外部API模式，自动陪伴轮询未启用")
+            return
+        if not _is_auto_companion_enabled():
+            logger.info("[ChatHandler] 自动陪伴已关闭，轮询未启用")
+            return
+
+        if self._auto_timer is None:
+            self._auto_timer = QTimer()
+            self._auto_timer.setSingleShot(True)
+            self._auto_timer.timeout.connect(self._on_auto_companion_tick)
+
+        self._schedule_next_auto_tick()
+        min_s = AUTO_COMPANION_INTERVAL_MS[0] // 1000
+        max_s = AUTO_COMPANION_INTERVAL_MS[1] // 1000
+        logger.info("[ChatHandler] 自动陪伴轮询已启用（%d~%d秒）", min_s, max_s)
+
+    def _schedule_next_auto_tick(self):
+        """按随机间隔调度下一次自动陪伴请求。"""
+        if self._auto_timer is None:
+            return
+        if not _is_auto_companion_enabled():
+            self._auto_timer.stop()
+            return
+        delay_ms = random.randint(AUTO_COMPANION_INTERVAL_MS[0], AUTO_COMPANION_INTERVAL_MS[1])
+        self._auto_timer.start(delay_ms)
+
+    def _on_auto_companion_tick(self):
+        """定时自动向模型发起陪伴观察请求，并尽量附带截图。"""
+        try:
+            if not _is_auto_companion_enabled():
+                return
+            if not self._ollama.use_api_key_mode:
+                return
+            if not self._ollama.is_running:
+                logger.debug("[ChatHandler] 自动陪伴跳过：API服务未就绪")
+                return
+            if self._ollama.is_chat_busy:
+                logger.debug("[ChatHandler] 自动陪伴跳过：当前有聊天请求进行中")
+                return
+
+            images = capture_screen()
+            if images:
+                logger.debug("[ChatHandler] 自动陪伴请求附带截图（%d bytes）", len(images[0]))
+            else:
+                logger.debug("[ChatHandler] 自动陪伴请求未附带截图（截图失败）")
+
+            self._ollama.stream_chat(
+                message=AUTO_COMPANION_PROMPT,
+                persona=self._build_runtime_persona(),
+                callback=lambda reply_text: self._publish_auto_response(reply_text, include_history=True),
+                on_chunk=None,
+                images=images,
+                quiet_throttled=True,
+                history=self._get_recent_context_snapshot(),
+            )
+        except Exception as e:
+            logger.error("[ChatHandler] 自动陪伴请求失败: %s", e)
+        finally:
+            self._schedule_next_auto_tick()
+

@@ -1,0 +1,121 @@
+飞行雪绒事件系统使用说明（按当前代码）
+
+1. 核心机制
+实现位置
+- `lib/core/event/center.py`
+- 全局入口：`get_event_center()`（单例）
+
+处理模型
+- `publish(Event)` -> 入队 -> 按订阅顺序依次回调
+- 主线程发布：若当前未处理队列，立即 drain
+- 非主线程发布：通过 Qt signal 回主线程再处理
+- 防长循环保护：单次最多处理 100 个事件，剩余事件下一轮继续
+
+中断机制
+- 回调中可调用 `event.mark_handled()`
+- 同一事件类型后续订阅者将被跳过
+
+2. 常用用法
+```python
+from lib.core.event.center import get_event_center, EventType, Event
+
+ec = get_event_center()
+
+def on_event(event: Event):
+    data = event.data
+
+ec.subscribe(EventType.TICK, on_event)
+ec.publish(Event(EventType.INFORMATION, {'text': 'hello'}))
+ec.unsubscribe(EventType.TICK, on_event)
+```
+
+3. 输入事件链路（实际行为）
+鼠标
+- Qt 原始事件 -> `ClickHandler` -> 发布：
+  - `MOUSE_PRESS`（按下即发）
+  - `MOUSE_MOVE`
+  - `MOUSE_ENTER` / `MOUSE_LEAVE`
+  - `MOUSE_CLICK`（双击窗口超时后确认单击）
+  - `MOUSE_DOUBLE_CLICK`（双击窗口内第二次点击立即确认）
+
+键盘
+- Qt 原始事件 -> `KeyHandler` -> `KEY_PRESS` / `KEY_RELEASE`
+
+命令框回车
+- `/xxx` -> `INPUT_COMMAND`
+- `#xxx` -> `INPUT_HASH`
+- `xxx` -> `INPUT_CHAT`
+
+4. 关键事件协议（高频使用）
+INFORMATION
+- `EventType.INFORMATION`
+- 常用字段：
+  - `text: str`
+  - `min: int`（最少显示 tick）
+  - `max: int`（最多显示 tick）
+  - `align: 'left'|'center'`（可选）
+  - `particle: bool`（可选）
+
+PARTICLE_REQUEST
+- `EventType.PARTICLE_REQUEST`
+- 字段：
+  - `particle_id: str`
+  - `area_type: 'point'|'rect'|'circle'`
+  - `area_data: tuple`
+- 坐标使用全局坐标，`ParticleOverlay` 内部转本地坐标
+
+MANAGER_SPAWN_REQUEST
+- 请求某管理器生成对象
+- 常见字段：
+  - `manager_id: 'snow_leopard'|'snow_pile'|'sofa'|'mortor'|'clock'|'speaker'`
+  - `count: int`（可选）
+  - `spawn_type: str`（如 `natural` / `command`）
+  - 其他管理器自定义字段（如闹钟 `seconds`）
+
+MANAGER_QUERY_REQUEST / RESPONSE
+- 跨管理器查询信息（数量、位置、保护范围等）
+- 建议携带 `request_id` 做请求-响应配对
+
+TARGET_POSITION_QUERY / RESPONSE
+- 统一目标位置查询（解耦状态机与具体管理器）
+
+PROTECTION_CHECK / RESPONSE
+- 主宠保护半径检测，支持多管理器聚合响应
+
+ENTITY_POSITION_REQUEST / RESPONSE
+- 查询实体（当前主要是 `pet_window`）位置与尺寸
+
+ENTITY_STATE_QUERY / RESPONSE
+- 查询实体移动状态/当前状态
+
+PET_TELEPORT
+- 主宠物瞬移事件
+- 支持：
+  - `x, y`
+  - `position: QPoint|(x,y)`
+
+5. 音乐与聊天事件
+音乐
+- 播放控制：`MUSIC_PLAY_TOP`、`MUSIC_ENQUEUE`、`MUSIC_NEXT_TRACK`、`MUSIC_PLAY_PAUSE`
+- 队列操作：`MUSIC_PLAY_QUEUE_INDEX`、`MUSIC_ENQUEUE_HISTORY`、`MUSIC_ENQUEUE_LIKED`、`MUSIC_ENQUEUE_LOCAL`
+- 进度：`MUSIC_PROGRESS_REQUEST` -> `MUSIC_PROGRESS`
+- 登录：`MUSIC_LOGIN_REQUEST` / `MUSIC_LOGOUT_REQUEST` / `MUSIC_LOGIN_STATUS_CHANGE`
+
+聊天
+- 输入：`INPUT_CHAT`
+- 流式最终文本：`STREAM_FINAL`
+- `ToolDispatcher` 订阅 `STREAM_FINAL` 解析 `###工具指令###`
+
+6. 生命周期事件
+- `APP_PRE_START`：预启动（发现插件、启动延时逻辑）
+- `APP_INIT_READY`：初始化就绪
+- `APP_START`：进入启动阶段
+- `APP_MAIN`：主循环就绪
+- `APP_EXIT`：退出清理
+- `APP_QUIT`：应用退出请求
+
+7. 开发约束
+- 回调必须短小，避免阻塞 UI 线程
+- 每个 `subscribe` 都要有对称 `unsubscribe`（通常在 `cleanup`）
+- `mark_handled()` 仅用于需要阻断传播的场景
+- 事件字段命名保持稳定，避免同语义多套 key

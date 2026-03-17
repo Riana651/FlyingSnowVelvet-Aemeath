@@ -1,0 +1,61 @@
+本项目得以完成，离不开以下个人、粉丝与社区的支持：
+
+【支持】
+
+贡献:开发者-Mark42的铁镐-保留所有权利
+===如果粉丝们能去B站点点关注的话...
+===https://space.bilibili.com/486401719
+
+贡献:debug-所有粉丝
+===郑重感谢所有参与测试版使用的粉丝们
+===谢谢你们的喜欢呀!我会努力更新哒!
+
+贡献:claude/codex支持-秋秋233丶
+===https://b23.tv/CxdeXfS
+
+贡献:启动动画-K39゜
+===https://space.bilibili.com/419336032
+
+贡献:关闭动画-大yi巴狐狸_
+===https://space.bilibili.com/220895159
+
+贡献:鸣潮字体素材制作
+===言语关系		https://space.bilibili.com/379335206
+===-华氏451	https://space.bilibili.com/51436514
+===野宫meko	https://space.bilibili.com/1829091
+=== 鸟居枫		https://space.bilibili.com/10599
+
+贡献:部分素材收集
+===粉丝群的大家
+
+贡献:安装教程指引-五更流年さま
+===https://space.bilibili.com/904605 
+
+贡献:爱弥斯语音模型-Depthscaper
+===https://space.bilibili.com/347135954
+
+贡献:夸克网盘-提供部分资金支持与文件分发
+
+ai平台技术支持:
+===claude-CODE	(核心架构)
+===IFLOW心流平台	(代码协助)
+===Openai-codeX	(代码协助)
+===deepseek深度求索,豆包	(日常帮助)
+===ollama			(本地部署)
+===GPT-SoVITs		(语音合成模块)
+使用的ai模型:sonnet4.6,gml5,gml4.7,GPT-5.3-codeX,GPT-5.4-codeX,deepseek-v3.2,qwen2.5  
+
+音乐模块支持:网易云音乐/QQ音乐/酷狗音乐(非官方,仅供学习交流)
+由于aip官方版权限制,默认模块推荐:网易云音乐
+
+【声明】
+
+此程序完全免费，开源，支持任何修改
+（特地做成了模块化结构便于扩展）
+严禁使用任何手段使用此程序进行商业化牟利
+
+项目中包含的部分视觉素材及非官方API来源于互联网。
+素材版权归原作者所有；
+如认为内容涉及侵权，请携带权属证明联系作者，核实后将立即删除
+
+默认素材来源：鸣潮-库洛游戏

@@ -1,0 +1,151 @@
+飞行雪绒 Script 开发指南（按当前代码）
+
+1. 启动与自动发现
+- 主入口：`lib/script/main.py`
+- 动态发现：`lib/core/plugin_registry.py`
+  - 管理器扫描：`lib/script/obj-*/manager.py`
+  - 粒子扫描：`lib/script/practical/*_particle.py`
+- 初始化流程：
+  1) `discover_all()`
+  2) `init_all_managers(pet)`
+  3) 管理器在 `cleanup_all_managers()` 中统一清理
+
+2. 管理器开发规范
+文件位置
+- 推荐：`lib/script/obj-你的模块/manager.py`
+
+必备要素
+- 继承 `BaseManager`
+- 定义：`MANAGER_ID / DISPLAY_NAME / COMMAND_TRIGGER / COMMAND_HELP`
+- 实现：`@classmethod create(...)`、`cleanup()`
+- 在 `cleanup()` 里完整 `unsubscribe`，并关闭已创建窗口/对象
+- 文件末尾注册：`manager_registry.register(YourManager.MANAGER_ID, YourManager)`
+
+建议实践
+- # 命令提示：在 `__init__` 调用 `get_hash_cmd_registry().register(...)`
+- 跨管理器通信优先用事件：
+  - 生成：`MANAGER_SPAWN_REQUEST`
+  - 查询：`MANAGER_QUERY_REQUEST / MANAGER_QUERY_RESPONSE`
+  - 目标查询：`TARGET_POSITION_QUERY / TARGET_POSITION_RESPONSE`
+  - 保护检测：`PROTECTION_CHECK / PROTECTION_RESPONSE`
+
+当前已内置管理器（obj-*）
+- `snow_leopard`（#雪豹）
+- `snow_pile`（#雪堆）
+- `sofa`（#沙发 / #沙发重力）
+- `mortor`（#摩托）
+- `clock`（#闹钟 / #闹钟重力）
+- `speaker`（#音响 / #音响重力 / #退出音乐登录）
+
+补充处理器（非 obj 目录）
+- `lib/script/practical/cleanup_handler.py`：注册 `#清理`
+
+3. 粒子脚本开发规范
+文件位置
+- 推荐：`lib/script/practical/xxx_particle.py`
+
+必备要素
+- 继承 `BaseParticleScript`
+- 使用 `@register_particle("particle_id")`
+- 定义 `PARTICLE_ID`
+- 实现 `create_particles(area_type, area_data)`
+
+粒子实例约定（被 `ParticleOverlay` 渲染）
+- 必需：`update()`、`alive`（属性或可调用）
+- 生命周期字段：`life`、`max_life`（建议提供，便于统一淡出）
+- 可选绘制标记：
+  - `is_text=True`（文字）
+  - `is_line=True`（线段）
+  - `is_circle=True`（圆）
+  - `no_fade=True`（不参与透明度淡出）
+  - `width/height`（矩形分支）
+
+区域参数约定
+- `point`: `(x, y)`
+- `rect`: `(x1, y1, x2, y2)`
+- `circle`: `(x, y, radius)`
+
+4. 实体接口（PetWindow / BaseEntity）
+- 状态切换：`change_state(state)`
+- 播放动画：`play_animation(state, duration=0)`
+- 调度任务：`schedule_task(callback, delay_ms, repeat=False)`
+- 取消任务：`cancel_task(task_id)`
+- 粒子：`spawn_particles(x, y, particle_id='scatter_fall', area_type='point', area_data=None)`
+
+注意
+- 当前默认粒子 ID 是 `scatter_fall`（不是历史的 `snowflake`）
+- 建议显式传入粒子 ID，避免默认值变化影响行为
+
+5. 输入链路与命令分发
+命令输入框：`lib/script/ui/command_dialog.py`
+- `/xxx` -> 发布 `INPUT_COMMAND`（由 `CmdCenter` 执行 shell）
+- `#xxx` -> 发布 `INPUT_HASH`（由各管理器/处理器订阅）
+- 普通文本 -> 发布 `INPUT_CHAT`（由 `ChatHandler` 处理）
+
+AI 工具调度
+- `ToolDispatcher` 监听 `STREAM_FINAL`
+- 从模型回复中提取 `###指令###` / `###指令 参数###`
+- 当前支持：音乐、下一曲、暂停、雪豹、沙发、摩托、闹钟/计时、音量、瞬移、回忆
+
+6. 最小管理器模板
+```python
+from lib.core.plugin_registry import BaseManager, manager_registry
+from lib.core.event.center import get_event_center, EventType
+
+class DemoManager(BaseManager):
+    MANAGER_ID = "demo"
+    DISPLAY_NAME = "示例管理器"
+    COMMAND_TRIGGER = "示例"
+    COMMAND_HELP = "[数量] - 示例命令"
+
+    def __init__(self, entity=None):
+        self._entity = entity
+        self._ec = get_event_center()
+        self._ec.subscribe(EventType.INPUT_HASH, self._on_hash)
+
+    @classmethod
+    def create(cls, entity=None, **kwargs):
+        return cls(entity)
+
+    def _on_hash(self, event):
+        pass
+
+    def cleanup(self):
+        self._ec.unsubscribe(EventType.INPUT_HASH, self._on_hash)
+
+manager_registry.register(DemoManager.MANAGER_ID, DemoManager)
+```
+
+7. 最小粒子模板
+```python
+from lib.script.practical.base_particle import BaseParticleScript
+from lib.core.plugin_registry import register_particle
+
+@register_particle("demo_particle")
+class DemoParticleScript(BaseParticleScript):
+    PARTICLE_ID = "demo_particle"
+
+    def create_particles(self, area_type, area_data):
+        x, y = area_data[0], area_data[1]
+        return [DemoParticle(x, y)]
+
+class DemoParticle:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.life = 1.0
+        self.max_life = 1.0
+
+    def update(self):
+        self.life -= 0.05
+
+    @property
+    def alive(self):
+        return self.life > 0
+```
+
+8. 交付前自检
+- 是否完成注册（管理器/粒子）
+- 是否补齐 `cleanup` 退订与资源释放
+- 是否符合事件数据格式
+- 是否更新 `doc` 目录对应说明
