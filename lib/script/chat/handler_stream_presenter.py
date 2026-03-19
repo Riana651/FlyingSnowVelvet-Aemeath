@@ -16,65 +16,50 @@ BUBBLE_MAX_TICKS = BUBBLE_CONFIG.get('default_max_ticks', 100)
 STREAM_FINAL_MIN_PER_CHAR = 3
 STREAM_FINAL_MIN_CAP = 300
 TOOL_MARKER_PATTERN = re.compile(r'###.*?###', re.S)
-TOPIC_MARKER_PATTERN = re.compile(r'^\s*///\s*([^/\r\n]{1,32}?)\s*///\s*', re.S)
+TOPIC_MARKER_PATTERN = re.compile(r'^\s*///\s*([^/\r\n]{1,32}?)\s*//(?:/)?\s*', re.S)
 VOICE_SENTENCE_SPLIT_PATTERN = re.compile('(?<=[。！？!?…])')
-VISION_KEYWORDS = [
-    '看.*一.*眼|看看这|看那|看屏幕',
-    '看.*(我的|这个)?.*屏幕',
-    '看.*桌面',
-    '看看.*桌面',
-    '桌面.*(什么|情况|显示)',
-    '查看.*桌面',
-    '识别.*屏幕',
-    '分析.*屏幕',
-    '你能看到',
-    '你看(得|到)?',
-    '截图',
-    '截.*屏',
-    '屏幕(上|里).*(什么|显示)',
-    '这是什么',
-    '图片(里|中).*',
-    '照片(里|中).*',
-    '画面(里|中)',
-    '你在(看|瞅).*什么',
-    '帮我看看',
-    '帮我(看|瞅)',
-    '瞅.*一.*眼|瞅瞅',
-    '瞧.*一.*眼|瞧瞧',
-    'look.*screen',
-    'see.*screen',
-    'show.*screen',
-    'what.?s.*screen',
-    'look.*desktop',
-    'check.*desktop',
-    'see.*desktop',
-    'take.*screenshot',
-    'screen.?shot',
-    'screen.?capture',
-    'capture.*screen',
-    'screenshot',
-    'record.*screen',
-    'analy[sz]e.*screen',
-    'what.*on.*desktop',
+NON_AI_VOICE_PATTERNS = [
+    re.compile(r'^请求失败(?:(?:（|\().*?(?:）|\)))?[:：]'),
+    re.compile(r'^外部\s*API请求过于频繁'),
+    re.compile(r'^强制模式\d+失败[:：]'),
+    re.compile(r'^当前模式不可用'),
+    re.compile(r'^(?:OpenAI|Ollama|API|外部API)\s*(?:兼容)?请求失败[:：]'),
+    re.compile(r'^(?:网络超时|连接失败|服务未就绪|登录态抓取超时|抓取失败)[:：]'),
+]
+VISION_PATTERNS = [
+    re.compile(r'(?:看|瞅|瞧|看看|帮我看|帮忙看|给我看).*(?:屏幕|桌面|界面|画面|截图|图片|图里|照片)', re.I),
+    re.compile(r'(?:识别|分析|查看|检查).*(?:屏幕|桌面|界面|画面|截图|图片|照片)', re.I),
+    re.compile(r'(?:屏幕|桌面|界面|画面|截图|图片|照片).*(?:有什么|是什么|显示了什么|内容|情况|问题)', re.I),
+    re.compile(r'你能看到.*(?:什么|啥)', re.I),
+    re.compile(r'(?:look|see|check|analy[sz]e).*(?:screen|desktop|screenshot|image|picture)', re.I),
+    re.compile(r'(?:screen|desktop|screenshot|image|picture).*(?:show|showing|content|what)', re.I),
+]
+VISION_NEGATIVE_PATTERNS = [
+    re.compile(r'(?:不要|别|不用).*(?:看|识别|分析|检查)', re.I),
+    re.compile(r'(?:不用|不需要).*(?:截图|看屏幕|看桌面|分析图片)', re.I),
 ]
 
 
 def _should_capture_screen(text: str) -> bool:
     """
-    检查用户消息是否触发视觉请求。
+    ?????????????????
 
-    Args:
-        text: 用户输入文本
-
-    Returns:
-        是否应该截图并发送给模型
+    ?????????/??/?? ??????????????????
+    ???????????/???????
     """
-    normalized = str(text or "")
-    condensed = re.sub(r"\s+", "", normalized)
-    for pattern in VISION_KEYWORDS:
-        if re.search(pattern, normalized, re.IGNORECASE):
+    normalized = str(text or '').strip()
+    if not normalized:
+        return False
+
+    condensed = re.sub(r'\s+', '', normalized)
+    for pattern in VISION_NEGATIVE_PATTERNS:
+        if pattern.search(normalized) or (condensed and pattern.search(condensed)):
+            return False
+
+    for pattern in VISION_PATTERNS:
+        if pattern.search(normalized):
             return True
-        if condensed and condensed != normalized and re.search(pattern, condensed, re.IGNORECASE):
+        if condensed and condensed != normalized and pattern.search(condensed):
             return True
     return False
 
@@ -104,7 +89,8 @@ def _strip_tool_commands_for_display(text: str) -> str:
         if stripped.startswith('///'):
             # 流式首段可能暂时未闭合 ///主题///，在闭合前不展示，避免闪烁。
             closed_at = stripped.find('///', 3)
-            if closed_at < 0:
+            broken_closed_at = stripped.find('//', 3)
+            if closed_at < 0 and broken_closed_at < 0:
                 return ''
 
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
@@ -129,6 +115,24 @@ def _build_ai_voice_text(text: str) -> str:
         logger.debug("[ChatHandler] AI 语音超长，已截断到最大长度（%d -> %d 字）", len(cleaned), len(truncated))
     return truncated
 
+
+def _is_non_ai_status_text(text: str) -> bool:
+    cleaned = _strip_tool_commands_for_display(str(text or ""))
+    if not cleaned:
+        return True
+    for pattern in NON_AI_VOICE_PATTERNS:
+        if pattern.search(cleaned):
+            return True
+    return False
+
+
+def _should_emit_ai_voice(text: str) -> bool:
+    cleaned = _strip_tool_commands_for_display(str(text or ""))
+    if _is_non_ai_status_text(cleaned):
+        logger.debug("[ChatHandler] 检测到非AI提示文本，跳过GSV播报: %s", cleaned[:80])
+        return False
+    return True
+
 class ChatHandlerStreamPresenterMixin:
     def _on_stream_chunk(self, accumulated_text: str):
         """
@@ -141,16 +145,21 @@ class ChatHandlerStreamPresenterMixin:
         particle 策略：首个 chunk 替换"..."等待气泡时触发上淡出粒子；
                        后续 chunk 静默更新文本，不重复产生粒子。
         """
+        display_text = _strip_tool_commands_for_display(accumulated_text)
+        is_status_text = _is_non_ai_status_text(display_text)
+
         if self._stream_first_chunk:
-            display_text = _strip_tool_commands_for_display(accumulated_text)
             self._stream_last_display = display_text
-            logger.debug("[ChatHandler] 收到首个流式分片（累计 %d 字）", len(display_text))
+            if is_status_text:
+                logger.info("[ChatHandler] 收到状态文本分片，按提示气泡处理: %s", display_text[:80])
+            else:
+                logger.debug("[ChatHandler] 收到首个流式分片（累计 %d 字）", len(display_text))
             self._stream_first_chunk = False
             self._event_center.publish(Event(EventType.INFORMATION, {
                 "text":     display_text,
                 "min":      0,
                 "max":      100,
-                "particle": True,
+                "particle": not is_status_text,
                 "force_replace": True,
             }))
             return
@@ -167,6 +176,7 @@ class ChatHandlerStreamPresenterMixin:
         if display_text == self._stream_last_display:
             return
         self._stream_last_display = display_text
+        is_status_text = _is_non_ai_status_text(display_text)
         self._event_center.publish(Event(EventType.INFORMATION, {
             "text":     display_text,
             "min":      0,
@@ -174,6 +184,8 @@ class ChatHandlerStreamPresenterMixin:
             "particle": False,
             "force_replace": True,
         }))
+        if is_status_text:
+            logger.debug("[ChatHandler] 状态文本流已更新气泡，不进入 AI 打字表现: %s", display_text[:80])
 
     @staticmethod
     def _calc_stream_final_min_ticks(text: str) -> int:
@@ -206,19 +218,24 @@ class ChatHandlerStreamPresenterMixin:
         else:
             logger.debug("[ChatHandler] Final raw reply: %s", text[:160].replace('\n', '\\n'))
             display_text = _strip_tool_commands_for_display(text)
+            is_status_text = _is_non_ai_status_text(display_text)
             final_min_ticks = self._calc_stream_final_min_ticks(display_text)
             final_max_ticks = max(BUBBLE_MAX_TICKS, final_min_ticks)
 
-            if self._stream_first_chunk:
+            if self._stream_first_chunk or is_status_text:
                 # 兜底：若底层返回了完整文本但未触发任何 chunk，则回填最终气泡，
                 # 避免用户只看到等待中的 "..."。
                 self._event_center.publish(Event(EventType.INFORMATION, {
                     "text": display_text,
                     "min":  final_min_ticks,
                     "max":  final_max_ticks,
+                    "particle": False,
                 }))
-                logger.warning("[ChatHandler] 未收到流式分片，已回填最终回复（%d 字，min=%d）",
-                               len(display_text), final_min_ticks)
+                if is_status_text:
+                    logger.info("[ChatHandler] 系统状态文本仅显示气泡，不走AI回复通道: %s", display_text[:80])
+                else:
+                    logger.warning("[ChatHandler] 未收到流式分片，已回填最终回复（%d 字，min=%d）",
+                                   len(display_text), final_min_ticks)
             else:
                 # 流式完成后重发同文最终气泡，应用按字数计算的 min（静默替换，无粒子）。
                 self._event_center.publish(Event(EventType.INFORMATION, {
@@ -230,7 +247,7 @@ class ChatHandlerStreamPresenterMixin:
                 logger.debug("[ChatHandler] 流式响应完毕（共 %d 字，final_min=%d）",
                              len(display_text), final_min_ticks)
 
-            voice_text = _build_ai_voice_text(display_text)
+            voice_text = _build_ai_voice_text(display_text) if _should_emit_ai_voice(display_text) else ""
             if voice_text:
                 self._event_center.publish(Event(EventType.AI_VOICE_REQUEST, {
                     "text": voice_text,
@@ -239,14 +256,15 @@ class ChatHandlerStreamPresenterMixin:
                     "voice_volume": VOICE.get("voice_volume", 1.0),
                 }))
 
-        if include_history:
+        if include_history and not _is_non_ai_status_text(text):
             effective_user = str(user_text or self._last_message or '').strip()
             if effective_user:
                 self._append_recent_context('user', effective_user)
             self._append_recent_context('assistant', text)
 
-        # 无论成功还是降级，均发布最终文本供工具调度器处理
-        self._event_center.publish(Event(EventType.STREAM_FINAL, {"text": text}))
+        # 非AI状态文本只显示气泡，不进入 AI 最终回复通道
+        if not _is_non_ai_status_text(text):
+            self._event_center.publish(Event(EventType.STREAM_FINAL, {"text": text}))
 
     def _publish_auto_response(self, text: str, include_history: bool = False):
         """

@@ -17,6 +17,7 @@ from lib.script.chat.handler import get_chat_handler, cleanup_chat_handler
 from lib.script.chat.memory import get_stream_memory, cleanup_stream_memory
 from lib.script.tool_dispatcher import get_tool_dispatcher, cleanup_tool_dispatcher
 from lib.script.gsvmove import get_gsvmove_service, cleanup_gsvmove_service
+from lib.script.yuanbao_free_api import get_yuanbao_free_api_service, cleanup_yuanbao_free_api_service
 from lib.script.microphone_stt import (
     cleanup_microphone_push_to_talk_manager,
     cleanup_microphone_stt_service,
@@ -28,6 +29,7 @@ from lib.core.plugin_registry import (
     discover_all, init_all_managers, cleanup_all_managers, get_manager
 )
 from lib.core.tray_icon import get_tray_icon, cleanup_tray_icon
+from lib.script.ui.shutdown import hide_all_runtime_ui, cleanup_all_runtime_ui
 from lib.script.app.single_instance import (
     acquire_single_instance_lock as _new_acquire_single_instance_lock,
     notify_already_running as _new_notify_already_running,
@@ -61,12 +63,21 @@ class ApplicationState:
         self._init_ready = False
         # 系统托盘图标
         self._tray_icon = None
+        self._exit_requested = False
+        self._exit_in_progress = False
+        self._exit_completed = False
+        self._components_cleaned = False
+        self._logger_cleaned = False
+        self._exit_code = 0
+        self._shutdown_steps = []
+        self._shutdown_step_index = 0
 
         # 音频核心在事件中心初始化后立即创建，以便订阅 APP_PRE_START 完成 MCI 预热
         from lib.core.voice.core import get_voice_core
         self._voice = get_voice_core()
         # GSVmove 文本转语音桥接：预启动阶段后台拉起本地 TTS 服务
         self._gsvmove = get_gsvmove_service()
+        self._yuanbao_free_api = get_yuanbao_free_api_service()
         self._microphone_stt = get_microphone_stt_service()
         self._microphone_push_to_talk = get_microphone_push_to_talk_manager()
         # 语音抽象层：接收 VOICE_REQUEST 并路由到底层声音系统
@@ -82,6 +93,7 @@ class ApplicationState:
         # 订阅事件
         self._event_center.subscribe(EventType.APP_PRE_START, self._on_pre_start)
         self._event_center.subscribe(EventType.APP_INIT_READY, self._on_init_ready)
+        self._event_center.subscribe(EventType.APP_QUIT, self._on_app_quit)
 
     def _publish_event(self, event_type: EventType, data: dict = None):
         """发布事件"""
@@ -163,7 +175,12 @@ class ApplicationState:
     def _on_tray_quit(self):
         """托盘菜单退出回调"""
         # 调用 exit 方法进行正常退出流程
-        self.exit(0)
+        self.request_exit(0)
+
+    def _on_app_quit(self, event: Event):
+        """缁熶竴鎺ョ APP_QUIT锛岄伩鍏嶇洿鎺ュ己閫€ Qt 浜嬩欢寰幆銆?"""
+        event.mark_handled()
+        self.request_exit(int((event.data or {}).get('exit_code', 0)))
 
     def start(self):
         """启动状态 - 初始化应用程序"""
@@ -213,36 +230,126 @@ class ApplicationState:
         """运行 Qt 事件循环"""
         return self._app.exec_()
 
-    def exit(self, exit_code: int = 0):
-        """退出状态 - 清理资源"""
-        # 发布退出事件
-        self._publish_event(EventType.APP_EXIT, {
-            'exit_code': exit_code
-        })
+    def request_exit(self, exit_code: int = 0):
+        self._exit_requested = True
 
-        # 清理资源
+        if self._exit_in_progress or self._exit_completed:
+            if exit_code and self._exit_code == 0:
+                self._exit_code = exit_code
+            return
+
+        self._exit_code = exit_code
+        self._exit_in_progress = True
+        logger.info('收到退出请求，开始分阶段关闭组件')
+        hide_all_runtime_ui()
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.begin_shutdown()
+            except Exception:
+                pass
+
+        if self._app is None:
+            self._perform_component_cleanup()
+            self._exit_completed = True
+            return
+
+        self._shutdown_steps = [
+            ('stop_primary_windows', self._shutdown_stop_primary_windows, 30),
+            ('cleanup_runtime_services', self._shutdown_cleanup_runtime_services, 30),
+            ('cleanup_visual_components', self._shutdown_cleanup_visual_components, 30),
+            ('play_exit_animation', self._shutdown_play_exit_animation, 120),
+            ('quit_application', self._shutdown_quit_application, 0),
+        ]
+        self._shutdown_step_index = 0
+        QTimer.singleShot(0, self._run_next_shutdown_step)
+
+    def _run_next_shutdown_step(self):
+        if self._exit_completed or self._shutdown_step_index >= len(self._shutdown_steps):
+            return
+
+        step_index = self._shutdown_step_index
+        step_name, step_func, delay_ms = self._shutdown_steps[step_index]
+        self._shutdown_step_index += 1
+
+        logger.info('退出阶段 %s/%s: %s', step_index + 1, len(self._shutdown_steps), step_name)
+        try:
+            step_func()
+        except Exception:
+            import traceback
+            logger.error('退出阶段 %s 执行失败:\n%s', step_name, traceback.format_exc())
+
+        if not self._exit_completed and self._shutdown_step_index < len(self._shutdown_steps):
+            QTimer.singleShot(delay_ms, self._run_next_shutdown_step)
+
+    def _process_pending_events(self):
+        if self._app is None:
+            return
+        try:
+            self._app.processEvents()
+        except Exception:
+            pass
+
+    def _shutdown_stop_primary_windows(self):
+        if self._tray_icon:
+            try:
+                self._tray_icon.quit_requested.disconnect(self._on_tray_quit)
+            except (TypeError, RuntimeError):
+                pass
+
         if self._pet:
-            # 停止计时器管理器
-            if hasattr(self._pet, '_timing_manager') and self._pet._timing_manager:
-                self._pet._timing_manager.stop()
-                self._pet._timing_manager.clear_all()
-            
-            # 关闭宠物窗口
-            self._pet.close()
+            timing_manager = getattr(self._pet, '_timing_manager', None)
+            if timing_manager:
+                timing_manager.stop()
+                timing_manager.clear_all()
+
+            try:
+                self._pet.close()
+            except Exception:
+                pass
+
+            try:
+                self._pet.deleteLater()
+            except Exception:
+                pass
+
             self._pet = None
 
-        # ── 使用统一清理函数清理所有管理器 ────────────────────────────
+        self._process_pending_events()
+
+    def _shutdown_cleanup_runtime_services(self):
+        self._perform_component_cleanup(skip_visual_cleanup=True)
+        self._process_pending_events()
+
+    def _shutdown_cleanup_visual_components(self):
+        self._cleanup_visual_components()
+        self._process_pending_events()
+
+    def _shutdown_play_exit_animation(self):
+        if self._animation is not None:
+            try:
+                self._animation.play_exit()
+            except Exception:
+                import traceback
+                logger.error('启动退出动画失败:\n%s', traceback.format_exc())
+
+    def _shutdown_quit_application(self):
+        if self._app:
+            self._app.quit()
+        self._exit_completed = True
+
+    def _perform_component_cleanup(self, skip_visual_cleanup: bool = False):
+        if self._components_cleaned:
+            if not skip_visual_cleanup:
+                self._cleanup_visual_components()
+            return
+
         cleanup_all_managers()
         self._managers.clear()
 
-        # 清理清理命令处理器
         if self._cleanup_handler:
             from lib.script.practical.cleanup_handler import cleanup_cleanup_handler
             cleanup_cleanup_handler()
             self._cleanup_handler = None
-
-        # 清理全局单例
-        from lib.core.draw_core import cleanup_draw_core
 
         cleanup_chat_handler()
         cleanup_stream_memory()
@@ -251,41 +358,66 @@ class ApplicationState:
         cleanup_cmd_center()
         cleanup_voice_request_handler()
         cleanup_gsvmove_service()
+        cleanup_yuanbao_free_api_service()
         cleanup_microphone_push_to_talk_manager()
         cleanup_microphone_stt_service()
 
-        # 清理说明书面板
-        from lib.script.ui.tooltip_panel import cleanup_tooltip_panel
-        cleanup_tooltip_panel()
+        self._components_cleaned = True
 
-        cleanup_event_center()
-        cleanup_draw_core()
+        if not skip_visual_cleanup:
+            self._cleanup_visual_components()
 
-        # 清理系统托盘图标
+    def _cleanup_visual_components(self):
+        from lib.core.draw_core import cleanup_draw_core
+        from lib.core.voice.core import cleanup_voice_core
+
+        cleanup_all_runtime_ui()
+
         cleanup_tray_icon()
         self._tray_icon = None
 
-        # 清理音频核心
-        from lib.core.voice.core import cleanup_voice_core
         cleanup_voice_core()
 
-        # 清理 GIF 资源引用
         self._gifs = None
 
-        # 清理粒子系统
         if self._particles:
-            self._particles.cleanup()
+            try:
+                self._particles.cleanup()
+                self._particles.close()
+                self._particles.deleteLater()
+            except Exception:
+                pass
             self._particles = None
 
-        # 清理启动/退出动画管理器
+        cleanup_draw_core()
+
+    def finalize_after_event_loop(self, exit_code: int) -> int:
+        final_exit_code = self._exit_code if self._exit_requested else exit_code
+
+        if self._exit_requested and not self._exit_completed and self._animation is not None:
+            try:
+                self._animation.play_exit()
+            except Exception:
+                pass
+
+        if not self._components_cleaned:
+            logger.warning('Qt 事件循环已经结束，但组件仍未完全清理，开始兜底收尾')
+            self._perform_component_cleanup()
+
         cleanup_start_exit_animation()
+        cleanup_event_center()
 
-        if self._app:
-            self._app.quit()
-            self._app = None
+        self._app = None
+        self._exit_completed = True
 
-        # 最后关闭日志系统（确保所有清理日志都被写入）
-        cleanup_app_logger()
+        if not self._logger_cleaned:
+            cleanup_app_logger()
+            self._logger_cleaned = True
+
+        return final_exit_code
+
+    def exit(self, exit_code: int = 0):
+        self.request_exit(exit_code)
 
 def main():
     """主函数"""
@@ -303,7 +435,7 @@ def main():
         exit_code = app_state.run_event_loop()
 
         # EXIT 状态
-        app_state.exit(exit_code)
+        exit_code = app_state.finalize_after_event_loop(exit_code)
 
         sys.exit(exit_code)
     except Exception as e:
@@ -311,7 +443,8 @@ def main():
         logger.error('程序运行出错:\n%s', traceback.format_exc())
 
         # 即使出错也要发布退出事件
-        app_state.exit(-1)
+        app_state.request_exit(-1)
+        app_state.finalize_after_event_loop(-1)
         input('按回车键退出...')
     finally:
         _new_release_single_instance_lock()

@@ -275,26 +275,6 @@ class GsvmoveService:
             return None
         return root
 
-    def deploy_bundled_update_scripts(self) -> tuple[Path, Path] | None:
-        root = self.resolve_install_root()
-        if root is None:
-            return None
-
-        resource_dir = Path(__file__).resolve().parents[3] / 'resc' / 'gsvmove_update'
-        install_bat_src = resource_dir / 'install.bat'
-        install_ps1_src = resource_dir / 'install.ps1'
-        missing = [str(item) for item in (install_bat_src, install_ps1_src) if not item.exists()]
-        if missing:
-            raise FileNotFoundError(f'Bundled GSV update scripts not found: {", ".join(missing)}')
-
-        install_bat = root / 'install.bat'
-        install_ps1 = root / 'install.ps1'
-        install_bat.write_bytes(install_bat_src.read_bytes())
-        install_ps1.write_bytes(install_ps1_src.read_bytes())
-        logger.info('[GsvmoveService] Bundled install scripts deployed: %s, %s', install_bat, install_ps1)
-        return root, install_bat
-
-
     def _on_app_pre_start(self, event: Event):
         del event
         self.kickoff_prestart()

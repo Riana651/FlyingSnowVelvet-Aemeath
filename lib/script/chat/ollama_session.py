@@ -7,6 +7,7 @@ import time
 import requests
 
 from ._multimodal import is_image_input_error
+from .handler_stream_presenter import _is_non_ai_status_text
 from .ollama_support import (
     logger,
     OLLAMA_BASE_URL,
@@ -297,7 +298,7 @@ class OllamaSessionMixin:
             else:
                 full_text = "请求失败（强制模式）: 当前模式不可用"
 
-        if streaming and full_text and self._signal and len(full_text) != sent_len:
+        if streaming and full_text and self._signal and len(full_text) != sent_len and not _is_non_ai_status_text(full_text):
             self._signal.chunk_ready.emit(request_id, full_text)
 
         if self._signal:

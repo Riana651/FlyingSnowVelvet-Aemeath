@@ -36,6 +36,9 @@
 
 贡献:夸克网盘-提供部分资金支持与文件分发
 
+贡献:chenwr727/yuanbao-free-api-元宝 OpenAI 兼容中转服务基础项目（以源码压缩包形式集成到 services/bundles/）
+===https://github.com/chenwr727/yuanbao-free-api
+
 ai平台技术支持:
 ===claude-CODE	(核心架构)
 ===IFLOW心流平台	(代码协助)

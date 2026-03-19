@@ -29,19 +29,11 @@ class StartExitAnimation:
 
     def _handle_pre_start(self, event):
         """处理预启动事件"""
-        if not self._is_enabled():
-            logger.info("[StartExitAnimation] 启动/退出动画已关闭，跳过启动动画")
-            return
-        logger.info("[StartExitAnimation] 收到预启动事件，播放启动动画（流式加载）")
-        self._play_animation('start')
+        self.play_start()
 
     def _handle_exit(self, event):
         """处理退出事件"""
-        if not self._is_enabled():
-            logger.info("[StartExitAnimation] 启动/退出动画已关闭，跳过退出动画")
-            return
-        logger.info("[StartExitAnimation] 收到退出事件，播放退出动画（流式加载）")
-        self._play_animation('exit')
+        self.play_exit()
 
     def _is_enabled(self) -> bool:
         """读取启动/退出动画总开关。"""
@@ -67,6 +59,22 @@ class StartExitAnimation:
             [sys.executable, player_script, animation_type],
             creationflags=subprocess.CREATE_NO_WINDOW
         )
+
+    def play_start(self):
+        """主动播放启动动画。"""
+        if not self._is_enabled():
+            logger.info("[StartExitAnimation] 启动/退出动画已关闭，跳过启动动画")
+            return
+        logger.info("[StartExitAnimation] 播放启动动画（流式加载）")
+        self._play_animation('start')
+
+    def play_exit(self):
+        """主动播放退出动画。"""
+        if not self._is_enabled():
+            logger.info("[StartExitAnimation] 启动/退出动画已关闭，跳过退出动画")
+            return
+        logger.info("[StartExitAnimation] 播放退出动画（流式加载）")
+        self._play_animation('exit')
 
     def cleanup(self):
         """清理资源"""

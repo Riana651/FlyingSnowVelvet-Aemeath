@@ -2,7 +2,7 @@
 import math
 import random
 import time
-from PyQt5.QtWidgets import QWidget, QApplication
+from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore    import Qt, QTimer, QPoint
 from PyQt5.QtGui     import QPainter
 
@@ -24,25 +24,19 @@ from lib.core.event.app_handler import AppEventHandler
 from lib.core.event.center import get_event_center, EventType, Event
 from lib.core.entity.base import BaseEntity
 from lib.script.mainpet.state import StateMachine
-from lib.script.ui.close_button import CloseButton
-from lib.script.ui.clickthrough_button import ClickThroughButton
 from lib.script.ui.restore_button import RestoreButton
-from lib.script.ui.command_dialog import CommandDialog
-from lib.script.ui.command_hint_box import CommandHintBox
-from lib.script.ui.bubble import Bubble
-from lib.script.ui.scale_button import ScaleUpButton, ScaleDownButton
-from lib.script.ui.launch_wuwa_button import LaunchWutheringWavesButton
-from lib.script.ui.mic_stt_indicator import MicSttIndicator
-from lib.script.ui.chat_mode_button import ChatModeButton
 from config.user_scale_config import get_user_scale_config
 from lib.core.draw_core import DrawRequest, get_draw_core
 from lib.core.action import Actions
+from lib.core.pet_window_ui_factory import attach_pet_window_ui, iter_pet_window_ui
+from lib.core.pet_window_setup import setup_pet_window, finalize_pet_window_startup
 from lib.core.timing import register_timing_manager
 from lib.core.anchor_utils import (
     get_anchor_point as resolve_anchor_point,
     publish_widget_anchor_response,
 )
 from config.scale import scale_px
+from lib.script.ui.shutdown import hide_all_runtime_ui
 
 
 def _get_main_pet_opacity() -> float:
@@ -158,58 +152,13 @@ class PetWindow(BaseEntity):
         self._move_particle_last_pos = None
         self._move_particle_enabled = False
 
-        # ── 初始位置：屏幕中央 ────────────────────────────────────────
-        screen = QApplication.primaryScreen().geometry()
-        w, h   = ANIMATION['pet_size']
-        self.move(screen.width() // 2 - w // 2,
-                  screen.height() // 2 - h // 2)
+        # 鈹€鈹€ 鍒濆浣嶇疆 / UI / 绐楀彛灞炴€?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        setup_pet_window(self)
+        attach_pet_window_ui(self, on_close=self._request_app_quit)
 
-        # ── UI 组件 ───────────────────────────────────────────────────
-        # 创建关闭按钮（独立窗口）
-        self._close_btn = CloseButton(on_close=QApplication.quit)
-
-        # 创建鼠标穿透按钮（独立窗口）
-        self._clickthrough_btn = ClickThroughButton()
-
-        # 创建缩放按钮（独立窗口）
-        self._scale_up_btn = ScaleUpButton(clickthrough_button=self._clickthrough_btn)
-        self._scale_down_btn = ScaleDownButton(scale_up_button=self._scale_up_btn)
-        self._launch_wuwa_btn = LaunchWutheringWavesButton(clickthrough_button=self._clickthrough_btn)
-        self._chat_mode_btn = ChatModeButton(launch_wuwa_button=self._launch_wuwa_btn)
-
-        # 恢复穿透按钮（独立窗口，在启用鼠标穿透时创建）
+        # 鎭㈠绌块€忔寜閽湪鍚敤鏃舵寜闇€鍒涘缓
         self._restore_btn = None
 
-        # 创建气泡框
-        self._bubble = Bubble()
-
-        # 创建命令提示框（在 CommandDialog 之前创建）
-        self._hint_box = CommandHintBox()
-
-        self._cmd = CommandDialog(
-            on_command=lambda text: None,
-            bubble=None,
-            close_button=self._close_btn,
-            clickthrough_button=self._clickthrough_btn,
-            hint_box=self._hint_box,
-            scale_up_button=self._scale_up_btn,
-            scale_down_button=self._scale_down_btn,
-            launch_wuwa_button=self._launch_wuwa_btn,
-            chat_mode_button=self._chat_mode_btn,
-        )
-        self._mic_stt_indicator = MicSttIndicator(self)
-
-        # ── 窗口属性 ──────────────────────────────────────────────────
-        self.setWindowFlags(
-            Qt.FramelessWindowHint
-            | Qt.WindowStaysOnTopHint
-            | Qt.Tool
-            | Qt.WindowSystemMenuHint  # 添加此标志以确保 mouseMoveEvent 能够正确触发
-        )
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_NoSystemBackground)
-        self.setFixedSize(*ANIMATION['pet_size'])
-        self.setCursor(Qt.ArrowCursor)
 
         # ── 定时器 ────────────────────────────────────────────────────
         # 使用 TimingManager 管理移动任务（动画使用GIF_FRAME事件驱动）
@@ -228,15 +177,7 @@ class PetWindow(BaseEntity):
             self._event_center.publish(event)
         else:
             self._change_state('idle')
-        self.show()
-        self._startup_voice_sound.play()
-        self._move_particle_last_pos = QPoint(self.frameGeometry().topLeft())
-        self._move_particle_enabled = True
-        get_topmost_manager().register(self)
-        self.update()
-
-        # UI 预加载：延迟一小段时间后触发 UI 的显示和隐藏，以预加载 UI 组件和动画
-        self._preload_ui()
+        finalize_pet_window_startup(self)
 
     def _register_all_resources(self):
         """将所有 GIF 资源注册到 DrawCore"""
@@ -891,19 +832,52 @@ class PetWindow(BaseEntity):
         if self._cmd._visible:
             self._cmd.toggle(None)
 
+    def _shutdown_ui_widgets(self):
+        for attr_name, widget in iter_pet_window_ui(self):
+            if widget is None:
+                continue
+            try:
+                widget.hide()
+            except Exception:
+                pass
+            try:
+                widget.close()
+            except Exception:
+                pass
+
+        restore_btn = getattr(self, '_restore_btn', None)
+        if restore_btn is not None:
+            try:
+                restore_btn.hide()
+            except Exception:
+                pass
+            try:
+                restore_btn.close()
+            except Exception:
+                pass
+
+        try:
+            self.hide()
+        except Exception:
+            pass
+
+    def _request_app_quit(self):
+        timing_manager = getattr(self, '_timing_manager', None)
+        if timing_manager is not None:
+            try:
+                timing_manager.stop()
+            except Exception:
+                pass
+
+        self._shutdown_ui_widgets()
+        hide_all_runtime_ui()
+        self._event_center.publish(Event(EventType.APP_QUIT, {
+            'entity': self,
+            'exit_code': 0,
+        }))
+
     def closeEvent(self, event):
-        indicator = getattr(self, '_mic_stt_indicator', None)
-        if indicator is not None:
-            try:
-                indicator.close()
-            except Exception:
-                pass
-        chat_mode_btn = getattr(self, '_chat_mode_btn', None)
-        if chat_mode_btn is not None:
-            try:
-                chat_mode_btn.close()
-            except Exception:
-                pass
+        self._shutdown_ui_widgets()
         super().closeEvent(event)
 
 

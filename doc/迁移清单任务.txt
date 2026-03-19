@@ -1,19 +1,16 @@
 ﻿飞行雪绒 迁移清单任务
 ========================
 
-当前整体进度：84%
+当前整体进度：86%
 当前阶段：Phase 8 - 兼容层瘦身与旧结构清理
-
 状态说明：
 [x] 已完成
 [>] 进行中
 [ ] 未开始
-
 Phase 0 - 准备
 --------------
 [x] 完成仓库体检与超大文件分析报告
 [x] 建立迁移清单任务文件并开始记录进度
-
 Phase 1 - 主入口低风险拆分
 ---------------------------
 [x] 新建 `lib/script/app/` 作为应用级基础模块目录
@@ -23,7 +20,6 @@ Phase 1 - 主入口低风险拆分
 [x] 从 `lib/script/main.py` 拆出 Qt 环境初始化模块
 [x] 修复 `lib/script/main.py` 启动动画与退出动画回归问题
 [>] 持续收缩 `lib/script/main.py` 体积与职责
-
 Phase 2 - 配置与基础设施
 -------------------------
 [x] 拆分 `config/shared_storage.py` 为 paths / io / merge / bootstrap
@@ -32,7 +28,6 @@ Phase 2 - 配置与基础设施
 [x] 收缩 `config/config.py` 公共导出，仅保留仓内真实使用配置
 [x] 收缩 `lib/core/logger.py`，仅保留 `initialize` / `cleanup` / `get_logger`
 [x] 新增 `lib/core/anchor_utils.py::publish_widget_anchor_response()` 并切换多处 UI 回包逻辑
-
 Phase 3 - 聊天链路
 ------------------
 [x] 拆分 `lib/script/chat/handler.py` 为 persona / auto_companion / stream_presenter
@@ -40,14 +35,12 @@ Phase 3 - 聊天链路
 [x] 拆分 `lib/script/chat/_api_client.py` 为 client / payload / stream_parser
 [x] 拆分 `lib/script/chat/_multimodal.py` 为截图与图像编码模块
 [x] 清理聊天链路旧兼容转发与冗余 mixin 别名
-
 Phase 4 - 语音与识别
 --------------------
 [x] 完成 `lib/script/gsvmove/service.py` 首轮低风险 helper 收敛与导入/语法复检
 [x] 完成 `lib/script/microphone_stt/service.py` 首轮低风险 helper 收敛与导入/语法复检
 [ ] 拆分 `lib/script/gsvmove/service.py` 为 discovery / deps / launcher / tts / process_guard
 [ ] 拆分 `lib/script/microphone_stt/service.py` 为 bootstrap / audio / worker / auto_mode
-
 Phase 5 - 音乐系统
 ------------------
 [x] 完成 `lib/script/cloudmusic/_mixin_playback.py` 首轮下载/播放 helper 收敛与导入/语法复检
@@ -57,7 +50,6 @@ Phase 5 - 音乐系统
 [ ] 拆分 `qqmusic/qqmisic.py` 为 api / auth / parser / download
 [ ] 拆分 `kugou/kugou.py` 为 api / auth / parser / download
 [ ] 收缩 `lib/script/cloudmusic/manager.py` 为 orchestration 层
-
 Phase 6 - 桌宠与 UI
 -------------------
 [x] 收敛 `speaker_control_buttons.py` 的重复状态读取与音乐控制样板
@@ -69,12 +61,10 @@ Phase 6 - 桌宠与 UI
 [ ] 拆分 `lib/script/ui/playlist_panel.py` 为 model / view / action / pagination
 [ ] 将 `speaker_control_buttons.py` 改为数据驱动按钮工厂
 [ ] 统一浮动按钮、提示框、列表弹层基类
-
 Phase 7 - 对象脚本与管理器
 ---------------------------
 [ ] 为 obj-* 抽取公共 entity / manager / command adapter 基类
 [ ] 收缩雪豹 / 沙发 / 摩托 / 音响 / 闹钟脚本体积
-
 Phase 8 - 工具与清理
 --------------------
 [x] 新增 `.gitignore` 忽略日志、缓存、编译产物
@@ -83,7 +73,6 @@ Phase 8 - 工具与清理
 [>] 持续回收老结构、兼容结构与无意义代码
 [ ] 拆分 `install_deps.py` 为 python / mirror / install / model / launcher
 [ ] 增加最小 smoke test 与持续语法检查清单
-
 累计关键落地项
 --------------
 1. `lib/script/main.py` 已拆出单实例锁、硬件探测、桌面快捷方式与 Qt 运行时初始化，当前主要承担 orchestration 入口职责。
@@ -124,10 +113,14 @@ Phase 8 - 工具与清理
 36. `lib/script/cloudmusic/_mixin_cache.py` 已移除未被调用的 `_load_meta()` 与其唯一依赖 `_legacy_meta_path()`；回收了一组优化后残留的死 helper。
 37. `lib/script/gsvmove/service.py` 与 `lib/script/microphone_stt/service.py` 已移除无用的 `from __future__ import annotations`；继续清理 Phase 4 链路中的冗余兼容导入。
 38. `lib/script/gsvmove/service.py` 已移除整条未接线的运行时依赖补齐 / PyPI 镜像回退 / NLTK 资源补齐死链，以及随之失效的状态字段、专属常量与未用导入；进一步回收优化过程中遗留的无用结构。
-
 39. `lib/script/music/providers/qq_provider.py` 与 `lib/script/music/providers/kugou_provider.py` 已在 provider 侧统一搜索结果规格化；QQ / 酷狗模式现与网易模式一致，仅保留时长、歌名与首个歌手，并优先从原始搜索字段提取首歌手。
-
 40. `lib/core/tray_icon.py` 已新增托盘“清理历史”动作，并接入 `lib/script/cloudmusic/manager.py` 的统一清理入口；该动作会清空所有平台音乐历史与登录数据，而“清理缓存”现仅清理缓存本身，不再混清登录数据。
+41. 已新增 `lib/script/ui/shutdown.py` 统一收口全局 UI 关闭/清理入口，并将退出链路前移为“先收 UI、再退服务、最后播退出动画”，避免浮层与面板拖到退出动画结束。
+42. 已新增 `lib/core/pet_window_ui_factory.py`，将 `lib/core/pet_window.py` 中主 UI 组件构造样板抽离为独立工厂；`PetWindow` 当前改为通过工厂挂载关闭按钮、命令框、提示框、缩放按钮等主 UI 组件。
+43. 已新增 `lib/core/pet_window_setup.py`，收拢 `PetWindow` 的窗口居中、窗口属性配置与启动后显示/预加载逻辑；`lib/core/pet_window.py` 继续向 orchestration 角色收缩。
+44. 已新增 `lib/script/ui/ai_settings_validators.py`，将 `AISettingsPanel` 的 AI 配置 URL/温度/线程/GSV 参数校验从面板类中抽离；面板侧现仅保留调用与报错展示。
+45. 已新增 `lib/script/ui/ai_settings_storage.py`，将 `AISettingsPanel` 的 AI 配置加载、`ollama_config.py` 持久化与运行时应用逻辑从面板类中抽离；面板侧现仅保留表单编排与保存入口。
+46. 已新增 `lib/script/ui/ai_settings_tabs.py`，将 `AISettingsPanel` 的分类 tab 页挂载、浮层 tab 条布局与 tab 切换显隐逻辑从面板类中抽离；面板侧仅保留调用入口。
 当前备注
 --------
 1. `lib/script/main.py` 已从 948 行收缩到 313 行，现主要承担 orchestration 入口职责。
@@ -138,12 +131,8 @@ Phase 8 - 工具与清理
 6. `lib/script/chat/handler.py` 当前主要承担输入编排入口，人格、自动伴聊、流式呈现已拆到独立模块。
 7. 当前优化策略仍以“低风险收敛”为主：优先回收老结构、兼容结构、重复样板与无意义代码，不贸然改动核心业务行为。
 8. 本文件已按 UTF-8 重新整理，替换早先 shell 管道导致的问号乱码版本。
-
 下一个建议执行项
 ----------------
 1. 继续收敛 `lib/script/kugou/kugou.py` 中鉴权 profile、收藏列表重试与 URL 候选刷新链路的重复实现。
 2. 视音乐链路收敛结果，决定是否将 `lib/script/qqmusic/qqmisic.py` 与 `lib/script/kugou/kugou.py` 拆为 `api / auth / parser / download`。
-3. 在音乐链路阶段性收敛后，再回到 `lib/core/pet_window.py` 与 `lib/script/ui/ai_settings_panel.py` 清理残留 UI 样板与旧结构。
-
-
-
+3. 继续拆分 `lib/script/ui/ai_settings_panel.py` 的 widgets / tabs 组装逻辑，进一步收缩面板类中的 UI 样板与旧结构。

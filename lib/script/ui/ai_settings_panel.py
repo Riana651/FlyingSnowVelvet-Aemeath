@@ -1,4 +1,4 @@
-"""AI 设置面板：编辑并保存 config/ollama_config.py。"""
+﻿"""AI 设置面板：编辑并保存 config/ollama_config.py。"""
 
 from __future__ import annotations
 
@@ -10,11 +10,12 @@ import os
 import random
 import re
 import subprocess
+import threading
 import webbrowser
 from pathlib import Path
-from urllib.parse import urlparse
+from typing import Callable
 
-from PyQt5.QtCore import Qt, QPoint, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import Qt, QPoint, QPropertyAnimation, QEasingCurve, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -43,11 +44,24 @@ from config.config import UI_THEME, UI
 from config.font_config import get_ui_font, get_digit_font
 from config.scale import scale_px
 from config.shared_storage import ensure_shared_config_ready, get_shared_config_path
+from lib.script.ui.ai_settings_validators import validate_ai_values
+from lib.script.ui.ai_settings_storage import load_ai_values, save_ai_values, apply_ai_runtime
+from lib.script.ui.ai_settings_tabs import (
+    attach_ai_settings_tabs,
+    layout_ai_settings_tab_bar,
+    show_ai_settings_tab_bar,
+    hide_ai_settings_tab_bar,
+    layout_ai_settings_tab_panels,
+    set_active_ai_settings_tab,
+)
 from lib.core.anchor_utils import animate_opacity
 from lib.core.event.center import get_event_center, EventType, Event
 from lib.core.logger import get_logger
 from lib.script.chat.ollama_registry import get_available_model_names, get_model_list_error
 from lib.script.microphone_stt.push_to_talk import parse_hotkey_binding
+from lib.script.update_manager import UpdateManager, UpdateError
+from lib.script.yuanbao_free_api import get_yuanbao_free_api_service
+from lib.script.yuanbao_free_api.service import get_yuanbao_free_api_log_path
 
 _logger = get_logger(__name__)
 
@@ -58,9 +72,18 @@ _GPU_MODE_AUTO = "auto"
 
 _DEFAULT_VALUES = {
     "api_key": "",
-    "force_reply_mode": "",
-    "api_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "api_model": "qwen3.5-plus",
+    "force_reply_mode": "4",
+    "api_base_url": "http://127.0.0.1:8000/v1",
+    "api_model": "deepseek-v3",
+    "yuanbao_login_url": "https://yuanbao.tencent.com/chat/naQivTmsDa",
+    "yuanbao_free_api_enabled": False,
+    "yuanbao_hy_source": "web",
+    "yuanbao_hy_user": "",
+    "yuanbao_x_uskey": "",
+    "yuanbao_agent_id": "naQivTmsDa",
+    "yuanbao_chat_id": "",
+    "yuanbao_remove_conversation": False,
+    "yuanbao_upload_images": True,
     "ollama_base_url": "http://localhost:11434",
     "ollama_model": "qwen2.5",
     "num_gpu": -1,
@@ -759,16 +782,12 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _ollama_config_path() -> Path:
-    return _project_root() / "config" / "ollama_config.py"
-
-
 def _decode_process_output(raw: bytes) -> str:
     if not raw:
         return ""
-    for enc in ("utf-8-sig", "utf-16", "utf-16le", "utf-16be", "gb18030", "cp936", "cp1252"):
+    for encoding in ("utf-8-sig", "utf-16", "utf-16le", "utf-16be", "gb18030", "cp936", "cp1252"):
         try:
-            return raw.decode(enc).replace("\x00", "")
+            return raw.decode(encoding).replace("\x00", "")
         except Exception:
             pass
     return raw.decode("utf-8", errors="ignore")
@@ -801,11 +820,7 @@ def _format_gb_text(byte_value: int | None) -> str:
 
 
 def _query_hardware_watermark_lines() -> tuple[str, str]:
-    """返回两行硬件水印文本。
-
-    第一行: GPU型号 显存GB
-    第二行: RAM 总内存GB
-    """
+    """返回两行硬件水印文本。"""
     fallback_line1 = "UnKnow GPU 0.00 GB"
     fallback_line2 = "RAM 0.00 GB"
     try:
@@ -836,7 +851,7 @@ def _query_hardware_watermark_lines() -> tuple[str, str]:
         if isinstance(raw_items, dict):
             items = [raw_items]
         elif isinstance(raw_items, list):
-            items = [x for x in raw_items if isinstance(x, dict)]
+            items = [item for item in raw_items if isinstance(item, dict)]
         else:
             items = []
         if not items:
@@ -854,97 +869,6 @@ def _query_hardware_watermark_lines() -> tuple[str, str]:
         return f"{model} {vram_text}", f"RAM {ram_text}"
     except Exception:
         return fallback_line1, fallback_line2
-
-
-def _py_literal(value) -> str:
-    if isinstance(value, bool):
-        return "True" if value else "False"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return repr(str(value))
-
-
-def _replace_assignment(text: str, key: str, py_literal: str) -> str:
-    pattern = re.compile(rf"(?m)^(\s*{re.escape(key)}\s*=\s*).*(\s*(?:#.*)?)$")
-    if not pattern.search(text):
-        raise ValueError(f"未找到配置项: {key}")
-    return pattern.sub(lambda m: f"{m.group(1)}{py_literal}{m.group(2)}", text, count=1)
-
-
-def _replace_dict_item(text: str, key: str, py_literal: str) -> str:
-    pattern = re.compile(rf"(?m)^(\s*'{re.escape(key)}'\s*:\s*).*(,\s*(?:#.*)?)$")
-    if not pattern.search(text):
-        raise ValueError(f"未找到字典项: '{key}'")
-    return pattern.sub(lambda m: f"{m.group(1)}{py_literal}{m.group(2)}", text, count=1)
-
-
-def _replace_or_insert_dict_item_after(text: str, key: str, py_literal: str, after_key: str) -> str:
-    try:
-        return _replace_dict_item(text, key, py_literal)
-    except ValueError:
-        pass
-
-    newline = "\r\n" if "\r\n" in text else "\n"
-    anchor_pattern = re.compile(rf"(?m)^(?P<indent>\s*)'{re.escape(after_key)}'\s*:\s*.*(?:\r?\n|$)")
-    match = anchor_pattern.search(text)
-    if not match:
-        raise ValueError(f"未找到插入锚点字典项: '{after_key}'")
-
-    indent = match.group("indent")
-    inserted = f"{indent}'{key}': {py_literal},{newline}"
-    return text[: match.end()] + inserted + text[match.end():]
-
-
-def _save_ollama_config(values: dict) -> None:
-    cfg_path = _ollama_config_path()
-    text = cfg_path.read_text(encoding="utf-8")
-    memory_context_limit_value = values.get("memory_context_limit", _DEFAULT_VALUES["memory_context_limit"])
-
-    # 顶层配置
-    text = _replace_assignment(text, "API_KEY", _py_literal(values["api_key"]))
-    text = _replace_assignment(text, "FORCE_REPLY_MODE", _py_literal(values["force_reply_mode"]))
-    text = _replace_assignment(text, "API_BASE_URL", _py_literal(values["api_base_url"]))
-    text = _replace_assignment(text, "API_MODEL", _py_literal(values["api_model"]))
-    text = _replace_assignment(text, "OLLAMA_MODEL", _py_literal(values["ollama_model"]))
-
-    # OLLAMA 字典项
-    text = _replace_dict_item(text, "base_url", _py_literal(values["ollama_base_url"]))
-    text = _replace_dict_item(text, "api_temperature", _py_literal(values["api_temperature"]))
-    text = _replace_dict_item(text, "gsv_temperature", _py_literal(values["gsv_temperature"]))
-    text = _replace_or_insert_dict_item_after(text, "gsv_speed_factor", _py_literal(values["gsv_speed_factor"]), "gsv_temperature")
-    text = _replace_or_insert_dict_item_after(text, "ai_voice_max_chars", _py_literal(values["ai_voice_max_chars"]), "gsv_speed_factor")
-    text = _replace_or_insert_dict_item_after(text, "memory_context_limit", _py_literal(memory_context_limit_value), "ai_voice_max_chars")
-    text = _replace_dict_item(text, "api_enable_thinking", _py_literal(values["api_enable_thinking"]))
-    text = _replace_dict_item(text, "enabled", _py_literal(values["auto_companion_enabled"]))
-
-    # OLLAMA_OPTIONS 字典项
-    text = _replace_dict_item(text, "num_gpu", _py_literal(values["num_gpu"]))
-    text = _replace_dict_item(text, "num_thread", _py_literal(values["num_thread"]))
-
-    _write_text_atomic(cfg_path, text)
-    _mirror_config_text_to_shared("ollama_config.py", text)
-
-
-def _apply_runtime(values: dict) -> None:
-    # 仅更新当前进程内模块变量；完整生效仍建议重启。
-    import config.ollama_config as oc
-    memory_context_limit_value = values.get("memory_context_limit", _DEFAULT_VALUES["memory_context_limit"])
-
-    oc.API_KEY = values["api_key"]
-    oc.FORCE_REPLY_MODE = values["force_reply_mode"]
-    oc.API_BASE_URL = values["api_base_url"]
-    oc.API_MODEL = values["api_model"]
-    oc.OLLAMA_MODEL = values["ollama_model"]
-    oc.OLLAMA["base_url"] = values["ollama_base_url"]
-    oc.OLLAMA["api_temperature"] = values["api_temperature"]
-    oc.OLLAMA["gsv_temperature"] = values["gsv_temperature"]
-    oc.OLLAMA["gsv_speed_factor"] = values["gsv_speed_factor"]
-    oc.OLLAMA["ai_voice_max_chars"] = values["ai_voice_max_chars"]
-    oc.OLLAMA["memory_context_limit"] = memory_context_limit_value
-    oc.OLLAMA["api_enable_thinking"] = values["api_enable_thinking"]
-    oc.AUTO_COMPANION["enabled"] = values["auto_companion_enabled"]
-    oc.OLLAMA_OPTIONS["num_gpu"] = values["num_gpu"]
-    oc.OLLAMA_OPTIONS["num_thread"] = values["num_thread"]
 
 
 def _gpu_mode_from_num_gpu(num_gpu_value) -> str:
@@ -1249,11 +1173,16 @@ class _DecimalSliderField(QWidget):
 class AISettingsPanel(QWidget):
     """托盘入口 AI 设置面板。"""
 
+    _ui_thread_call = pyqtSignal(object)
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._ui_thread_call.connect(self._invoke_ui_callable)
         self._ec = get_event_center()
         self._autostart_checkbox = None
         self._autostart_status_subscribed = False
+        self._check_update_btn = None
+        self._checking_updates = False
         self._subscribe_autostart_events()
         self.setWindowTitle("控制面板")
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -1333,6 +1262,23 @@ class AISettingsPanel(QWidget):
     def _set_form_row_description(self, form: QFormLayout, field_widget: QWidget, text: str) -> None:
         self._set_widget_description(field_widget, text)
         self._set_widget_description(form.labelForField(field_widget), text)
+
+    def _invoke_ui_callable(self, func) -> None:
+        if callable(func):
+            func()
+
+    def _run_on_ui_thread(self, func: Callable[[], None]) -> None:
+        if threading.current_thread() is threading.main_thread():
+            func()
+        else:
+            self._ui_thread_call.emit(func)
+
+    def _set_check_updates_busy(self, busy: bool) -> None:
+        def apply():
+            self._checking_updates = busy
+            if self._check_update_btn is not None:
+                self._check_update_btn.setEnabled(not busy)
+        self._run_on_ui_thread(apply)
 
     def _create_action_button_row(self, *button_specs):
         button_row = QHBoxLayout()
@@ -1489,12 +1435,13 @@ class AISettingsPanel(QWidget):
         self._set_form_row_description(
             form,
             self._api_key,
-            "手动接口密钥；留空时按回复模式自动选择来源。",
+            "外部接口密钥；接入内置 YuanBao-Free-API 时，这里填写你为本地服务设置的访问密钥。",
         )
 
         self._force_mode = _WatermarkComboBox()
         self._force_mode.setView(QListView(self._force_mode))
-        self._force_mode.addItem("自动选择(推荐)", "")
+        self._force_mode.addItem("优先走元宝web(默认)", "4")
+        self._force_mode.addItem("自动选择", "")
         self._force_mode.addItem("仅使用手动接口密钥", "0")
         self._force_mode.addItem("仅使用本地 Ollama", "2")
         self._force_mode.addItem("仅使用规则回复", "3")
@@ -1510,7 +1457,7 @@ class AISettingsPanel(QWidget):
         self._set_form_row_description(
             form,
             self._api_base_url,
-            "外部接口基地址，通常使用兼容 OpenAI 的 API 地址。",
+            "外部接口基地址，通常使用兼容 OpenAI 的 API 地址。启用 YuanBao-Free-API 时，这里应填写你的中转 API 地址，而不是腾讯元宝网页地址。",
         )
 
         self._api_model = QLineEdit()
@@ -1519,6 +1466,61 @@ class AISettingsPanel(QWidget):
             form,
             self._api_model,
             "外部接口模型名，例如 qwen3.5-plus。",
+        )
+
+        self._yuanbao_login_url_value = str(_DEFAULT_VALUES.get("yuanbao_login_url", ""))
+        self._yuanbao_hy_source_value = str(_DEFAULT_VALUES.get("yuanbao_hy_source", "web"))
+        self._yuanbao_hy_user_value = str(_DEFAULT_VALUES.get("yuanbao_hy_user", ""))
+        self._yuanbao_x_uskey_value = str(_DEFAULT_VALUES.get("yuanbao_x_uskey", ""))
+        self._yuanbao_agent_id_value = str(_DEFAULT_VALUES.get("yuanbao_agent_id", "naQivTmsDa"))
+
+        yuanbao_login_row, yuanbao_login_layout = self._create_fixed_width_row_group(
+            field_width=_CONFIG_FIELD_WIDTH,
+            spacing=scale_px(8, min_abs=6),
+        )
+        self._start_yuanbao_login_btn = QPushButton("登录元宝AI")
+        self._start_yuanbao_login_btn.setFixedWidth(scale_px(126, min_abs=108))
+        self._start_yuanbao_login_btn.clicked.connect(self._on_start_yuanbao_login)
+        yuanbao_login_layout.addWidget(self._start_yuanbao_login_btn, 0)
+        self._stop_yuanbao_login_btn = QPushButton("退出元宝登录")
+        self._stop_yuanbao_login_btn.setFixedWidth(scale_px(126, min_abs=108))
+        self._stop_yuanbao_login_btn.clicked.connect(self._on_stop_yuanbao_login)
+        yuanbao_login_layout.addWidget(self._stop_yuanbao_login_btn, 0)
+        yuanbao_login_layout.addStretch(1)
+        form.addRow("元宝登录", yuanbao_login_row)
+        self._set_widget_description(self._start_yuanbao_login_btn, "启动本地 YuanBao-Free-API 服务，弹出二维码面板并等待扫码登录。")
+        self._set_widget_description(self._stop_yuanbao_login_btn, "停止元宝登录流程并关闭本地元宝服务。")
+
+        self._yuanbao_free_api_enabled = QCheckBox("启用 YuanBao-Free-API 附加参数")
+        form.addRow("元宝Free-API", self._yuanbao_free_api_enabled)
+        self._set_form_row_description(
+            form,
+            self._yuanbao_free_api_enabled,
+            "启用后会自动附加元宝兼容参数，并可按选项复用会话或上传图片；登录态由扫码流程自动处理，无需手填。",
+        )
+
+        self._yuanbao_chat_id = self._create_config_line_edit(expanding=True)
+        form.addRow("chat_id", self._yuanbao_chat_id)
+        self._set_form_row_description(
+            form,
+            self._yuanbao_chat_id,
+            "可选；留空时由服务端创建新会话，填写则尽量复用指定会话。",
+        )
+
+        yuanbao_flags = QWidget()
+        yuanbao_flags_layout = QHBoxLayout(yuanbao_flags)
+        yuanbao_flags_layout.setContentsMargins(0, 0, 0, 0)
+        yuanbao_flags_layout.setSpacing(scale_px(12, min_abs=8))
+        self._yuanbao_remove_conversation = QCheckBox("请求后删除会话")
+        self._yuanbao_upload_images = QCheckBox("图片先走 /upload")
+        yuanbao_flags_layout.addWidget(self._yuanbao_remove_conversation, 0)
+        yuanbao_flags_layout.addWidget(self._yuanbao_upload_images, 0)
+        yuanbao_flags_layout.addStretch(1)
+        form.addRow("附加开关", yuanbao_flags)
+        self._set_form_row_description(
+            form,
+            yuanbao_flags,
+            "启用图片上传后，桌宠截图会先发到 /upload 生成 multimedia，再随聊天请求一并提交。",
         )
 
         base_row, base_layout = self._create_fixed_width_row_group(
@@ -1633,35 +1635,13 @@ class AISettingsPanel(QWidget):
 
         btn_row, root_buttons = self._create_action_button_row(
             ("恢复默认", self._on_restore_defaults),
-            ("更新GSV服务", self._on_update_gsv_service),
+            ("检查更新", self._on_check_updates),
             ("保存并退出", self._on_save_and_exit),
         )
-        self._reload_btn, self._update_gsv_btn, self._save_exit_btn = root_buttons
+        self._reload_btn, self._check_update_btn, self._save_exit_btn = root_buttons
         layout.addLayout(btn_row)
 
-        for category in _GENERAL_CONFIG_CATEGORIES:
-            panel = self._build_config_category_panel(category)
-            panel.hide()
-            self._tab_pages.append(panel)
-
-        self._tab_floating = QWidget(
-            self,
-            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.NoDropShadowWindowHint,
-        )
-        self._tab_floating.setAttribute(Qt.WA_TranslucentBackground)
-        self._tab_floating.setAttribute(Qt.WA_ShowWithoutActivating)
-
-        self._top_tab_bar = QTabBar(self._tab_floating)
-        self._top_tab_bar.setDocumentMode(True)
-        self._top_tab_bar.setDrawBase(False)
-        self._top_tab_bar.setElideMode(Qt.ElideRight)
-        self._top_tab_bar.addTab("AI设置")
-        for category in _GENERAL_CONFIG_CATEGORIES:
-            self._top_tab_bar.addTab(str(category["tab"]))
-        self._top_tab_bar.currentChanged.connect(self._on_top_tab_changed)
-        self._top_tab_bar.setCurrentIndex(0)
-        self._layout_top_tab_bar()
-        self._layout_config_panels()
+        attach_ai_settings_tabs(self, _GENERAL_CONFIG_CATEGORIES)
         self._ensure_config_defaults_integrity()
 
     def _build_config_category_panel(self, category: dict) -> QWidget:
@@ -2196,6 +2176,104 @@ class AISettingsPanel(QWidget):
         except Exception as e:
             _logger.error("打开 Ollama 下载页面失败: %s", e)
             self._emit_info(f"打开 Ollama 页面失败: {e}", min_tick=20, max_tick=180)
+    def _on_start_yuanbao_login(self) -> None:
+        api_key = self._api_key.raw_text().strip()
+
+        self._yuanbao_free_api_enabled.setChecked(True)
+        if not self._api_base_url.text().strip():
+            self._api_base_url.setText("http://127.0.0.1:8000/v1")
+        if not self._api_model.text().strip():
+            self._api_model.setText("deepseek-v3")
+
+        import config.ollama_config as oc
+        oc.API_KEY = api_key
+        oc.API_BASE_URL = self._api_base_url.text().strip() or "http://127.0.0.1:8000/v1"
+        oc.API_MODEL = self._api_model.text().strip() or "deepseek-v3"
+        oc.FORCE_REPLY_MODE = str(self._force_mode.currentData() or self._force_mode.currentText() or "4").strip() or "4"
+        oc.YUANBAO_FREE_API["enabled"] = True
+        oc.YUANBAO_FREE_API["login_url"] = str(getattr(self, "_yuanbao_login_url_value", _DEFAULT_VALUES.get("yuanbao_login_url", "")) or "")
+        oc.YUANBAO_FREE_API["agent_id"] = str(getattr(self, "_yuanbao_agent_id_value", _DEFAULT_VALUES.get("yuanbao_agent_id", "naQivTmsDa")) or "")
+
+        def worker() -> None:
+            try:
+                svc = get_yuanbao_free_api_service()
+                result = svc.begin_login_flow()
+                status = result.get('status') if isinstance(result, dict) else {}
+                status = status if isinstance(status, dict) else {}
+                logged_in = bool(result.get('logged_in') or status.get('logged_in')) if isinstance(result, dict) else False
+                qrcode_ready = bool(result.get('qrcode_exists') or status.get('qrcode_exists')) if isinstance(result, dict) else False
+                message = str((result or {}).get('message') or '').strip() if isinstance(result, dict) else ''
+                last_error = str(status.get('last_error') or '').strip()
+                stage = self._describe_yuanbao_stage(str(status.get('last_message') or '').strip())
+
+                if logged_in:
+                    self._emit_info("元宝已登录，本地服务可直接使用。", min_tick=14, max_tick=120)
+                elif qrcode_ready:
+                    self._emit_info("元宝二维码已生成，请在弹出的二维码窗口中扫码登录。", min_tick=16, max_tick=180)
+                else:
+                    log_path = get_yuanbao_free_api_log_path()
+                    detail = last_error or stage or message or f'请查看 {log_path.name}'
+                    self._emit_info(f"元宝登录未能启动：{detail}", min_tick=18, max_tick=260)
+            except Exception as exc:
+                _logger.error("Start YuanBao login failed: %s", exc)
+                self._emit_info(f"启动元宝登录失败: {exc}", min_tick=18, max_tick=220)
+
+        try:
+            from lib.script.ui.yuanbao_login_dialog import init_yuanbao_login_dialog
+            init_yuanbao_login_dialog()
+        except Exception as exc:
+            _logger.debug("Init YuanBao login dialog failed: %s", exc)
+        self._ec.publish(Event(EventType.YUANBAO_LOGIN_QR_SHOW, {
+            'title': '元宝扫码登录',
+            'status': '正在启动元宝服务并等待二维码生成，请稍候...',
+            'qr_png': None,
+        }))
+        self._emit_info("正在启动元宝服务并准备登录二维码，请稍候...", min_tick=12, max_tick=180)
+        threading.Thread(target=worker, daemon=True, name="yuanbao-login-start").start()
+
+    def _on_stop_yuanbao_login(self) -> None:
+        def worker() -> None:
+            try:
+                svc = get_yuanbao_free_api_service()
+                svc.stop_login_flow()
+                self._emit_info("已退出元宝登录，并关闭本地元宝服务。", min_tick=12, max_tick=140)
+            except Exception as exc:
+                _logger.error("Stop YuanBao login failed: %s", exc)
+                self._emit_info(f"退出元宝登录失败: {exc}", min_tick=18, max_tick=220)
+
+        self._emit_info("正在退出元宝登录并关闭本地元宝服务...", min_tick=10, max_tick=120)
+        threading.Thread(target=worker, daemon=True, name="yuanbao-login-stop").start()
+
+    @staticmethod
+    def _describe_yuanbao_stage(stage: str) -> str:
+        mapping = {
+            'starting_login': '正在初始化登录流程',
+            'starting_playwright': '正在启动浏览器驱动',
+            'launching_browser': '正在启动浏览器',
+            'creating_page': '正在创建页面',
+            'page_loading': '正在打开元宝页面',
+            'page_loaded': '元宝页面已打开，正在继续登录',
+            'browser_initialized': '浏览器已就绪，正在继续登录',
+            'dismissing_dialog': '正在关闭页面弹窗',
+            'resolving_login_button': '正在定位登录入口',
+            'waiting_login_button': '正在等待登录入口出现',
+            'clicking_login_button': '正在点击登录入口',
+            'login_button_clicked': '登录入口已点击，正在等待二维码',
+            'login_button_not_found': '未找到登录入口',
+            'waiting_qrcode': '正在等待二维码出现',
+            'qrcode_ready': '二维码已生成',
+            'waiting_scan_confirm': '二维码已生成，正在等待扫码确认',
+            'refreshing_qrcode': '二维码已过期，正在尝试刷新',
+            'qrcode_container_not_found': '未找到二维码容器',
+            'login_success': '登录成功',
+            'login_timeout': '扫码超时',
+            'browser_init_failed': '浏览器初始化失败',
+            'login_failed': '登录失败',
+            'login_button_not_found_assume_logged_in': '未找到登录入口，疑似已登录',
+            'already_logged_in': '已登录',
+            'browser_closed': '浏览器已关闭',
+        }
+        return mapping.get(stage, stage)
 
     @staticmethod
     def _wrap_fixed_width_field(widget: QWidget, field_width: int = _CONFIG_FIELD_WIDTH) -> QWidget:
@@ -2541,117 +2619,8 @@ class AISettingsPanel(QWidget):
                 self._validate_general_config_value(str(dict_name), str(key), value)
         self._validate_general_config_relations(values_by_dict)
 
-    @staticmethod
-    def _is_valid_http_url(text: str) -> bool:
-        try:
-            parsed = urlparse(text)
-        except Exception:
-            return False
-        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
-
     def _validate_ai_values(self, values: dict) -> None:
-        force_mode = str(values.get("force_reply_mode", "")).strip()
-        api_key = str(values.get("api_key", "") or "").strip()
-        api_base_url = str(values.get("api_base_url", "") or "").strip()
-        api_model = str(values.get("api_model", "") or "").strip()
-        ollama_base_url = str(values.get("ollama_base_url", "") or "").strip()
-        ollama_model = str(values.get("ollama_model", "") or "").strip()
-        num_gpu = values.get("num_gpu")
-        num_thread = values.get("num_thread")
-        api_temperature = values.get("api_temperature")
-        gsv_temperature = values.get("gsv_temperature")
-        gsv_speed_factor = values.get("gsv_speed_factor")
-        api_enable_thinking = values.get("api_enable_thinking")
-        auto_companion_enabled = values.get("auto_companion_enabled")
-
-        if force_mode not in ("", "0", "2", "3"):
-            raise ValueError("回复模式值无效")
-
-        if force_mode in ("", "0"):
-            if not api_base_url:
-                raise ValueError("接口地址不能为空")
-            if not self._is_valid_http_url(api_base_url):
-                raise ValueError("接口地址必须是有效的 http/https 地址")
-            if not api_model:
-                raise ValueError("接口模型不能为空")
-            if force_mode == "0" and not api_key:
-                raise ValueError("强制手动接口密钥模式下，接口密钥不能为空")
-
-        if force_mode in ("", "2"):
-            if not ollama_base_url:
-                raise ValueError("Ollama地址不能为空")
-            if not self._is_valid_http_url(ollama_base_url):
-                raise ValueError("Ollama地址必须是有效的 http/https 地址")
-            if not ollama_model:
-                raise ValueError("Ollama模型不能为空")
-
-        if isinstance(num_gpu, bool) or not isinstance(num_gpu, int):
-            raise ValueError("推理模式值无效")
-        if num_gpu not in (-1, 0) and num_gpu < 1:
-            raise ValueError("推理模式值无效")
-
-        if isinstance(num_thread, bool) or not isinstance(num_thread, int):
-            raise ValueError("CPU线程数必须是整数")
-        if num_thread < 0 or num_thread > 1024:
-            raise ValueError("CPU线程数范围应为 0~1024")
-
-        if isinstance(api_temperature, bool) or not isinstance(api_temperature, (int, float)):
-            raise ValueError("采样温度必须是数字")
-        try:
-            temp = float(api_temperature)
-        except Exception as e:
-            raise ValueError("采样温度必须是数字") from e
-        if not math.isfinite(temp):
-            raise ValueError("采样温度必须是有限数字")
-        if not (0.0 <= temp <= 2.0):
-            raise ValueError("采样温度范围应为 0~2")
-
-        if isinstance(gsv_temperature, bool) or not isinstance(gsv_temperature, (int, float)):
-            raise ValueError("GSV服务温度必须是数字")
-        try:
-            gsv_temp = float(gsv_temperature)
-        except Exception as e:
-            raise ValueError("GSV服务温度必须是数字") from e
-        if not math.isfinite(gsv_temp):
-            raise ValueError("GSV服务温度必须是有限数字")
-        if not (0.0 <= gsv_temp <= 2.0):
-            raise ValueError("GSV服务温度范围应为 0~2")
-
-        if isinstance(gsv_speed_factor, bool) or not isinstance(gsv_speed_factor, (int, float)):
-            raise ValueError("GSV语速必须是数字")
-        try:
-            speed_factor = float(gsv_speed_factor)
-        except Exception as e:
-            raise ValueError("GSV语速必须是数字") from e
-        if not math.isfinite(speed_factor):
-            raise ValueError("GSV语速必须是有限数字")
-        if not (0.5 <= speed_factor <= 2.0):
-            raise ValueError("GSV语速范围应为 0.5~2.0")
-
-        ai_voice_max_chars = values.get("ai_voice_max_chars")
-        if isinstance(ai_voice_max_chars, bool) or not isinstance(ai_voice_max_chars, (int, float)):
-            raise ValueError("GSV语音字数限制必须是数字")
-        try:
-            chars = int(ai_voice_max_chars)
-        except Exception as e:
-            raise ValueError("GSV语音字数限制必须是整数") from e
-        if not (20 <= chars <= 80):
-            raise ValueError("GSV语音字数限制范围应为 20~80")
-
-        memory_context_limit = values.get("memory_context_limit")
-        if isinstance(memory_context_limit, bool) or not isinstance(memory_context_limit, (int, float)):
-            raise ValueError("记忆上下文条数必须是数字")
-        try:
-            memory_limit = int(memory_context_limit)
-        except Exception as e:
-            raise ValueError("记忆上下文条数必须是整数") from e
-        if not (0 <= memory_limit <= 48):
-            raise ValueError("记忆上下文条数范围应为 0~48")
-
-        if not isinstance(api_enable_thinking, bool):
-            raise ValueError("思考模式配置无效")
-        if not isinstance(auto_companion_enabled, bool):
-            raise ValueError("自动陪伴配置无效")
+        validate_ai_values(values)
 
     def _load_config_tab_values(self) -> None:
         import config.config as cc
@@ -3192,81 +3161,23 @@ class AISettingsPanel(QWidget):
         )
 
     def _layout_top_tab_bar(self) -> None:
-        if not hasattr(self, "_top_tab_bar") or self._top_tab_bar is None:
-            return
-        if not hasattr(self, "_tab_floating") or self._tab_floating is None:
-            return
-        h = max(scale_px(28, min_abs=24), self._top_tab_bar.sizeHint().height())
-        target_w = self._top_tab_bar.sizeHint().width() + scale_px(6, min_abs=4)
-        max_w = max(scale_px(180, min_abs=160), self.width())
-        w = min(target_w, max_w)
-        self._top_tab_bar.setGeometry(0, 0, w, h)
-        top_left = self.mapToGlobal(QPoint(0, 0))
-        x = int(top_left.x() + (self.width() - w) / 2.0)
-        y = int(top_left.y() - h)
-        self._tab_floating.setGeometry(x, y, w, h)
-        self._tab_floating.raise_()
+        layout_ai_settings_tab_bar(self)
 
     def _show_floating_tab(self) -> None:
-        if self._tab_floating is None:
-            return
-        self._layout_top_tab_bar()
-        self._tab_floating.show()
-        self._tab_floating.raise_()
+        show_ai_settings_tab_bar(self)
 
     def _hide_floating_tab(self) -> None:
-        if self._tab_floating is None:
-            return
-        self._tab_floating.hide()
+        hide_ai_settings_tab_bar(self)
 
     def _layout_config_panels(self) -> None:
-        if not hasattr(self, "_ai_panel") or self._ai_panel is None:
-            return
-        geo = self._ai_panel.geometry()
-        for panel in self._tab_pages[1:]:
-            if panel is None:
-                continue
-            panel.setGeometry(geo)
-        if self._tab_floating is not None and self._tab_floating.isVisible():
-            self._tab_floating.raise_()
+        layout_ai_settings_tab_panels(self)
 
     def _on_top_tab_changed(self, index: int) -> None:
-        if not self._tab_pages:
-            return
-        target_index = max(0, min(index, len(self._tab_pages) - 1))
-        for idx, panel in enumerate(self._tab_pages):
-            if panel is not None:
-                panel.setVisible(idx == target_index)
-        self._layout_config_panels()
-        if 0 <= target_index < len(self._tab_pages):
-            self._tab_pages[target_index].raise_()
-        if self._tab_floating is not None and self._tab_floating.isVisible():
-            self._tab_floating.raise_()
+        set_active_ai_settings_tab(self, index)
 
     def load_values(self) -> None:
-        import config.ollama_config as oc
-
         self._reset_shared_on_next_save = False
-        self._api_key.set_raw_text(str(oc.API_KEY or ""))
-        self._api_base_url.setText(str(oc.API_BASE_URL or ""))
-        self._api_model.setText(str(oc.API_MODEL or ""))
-        self._ollama_base_url.setText(str(oc.OLLAMA.get("base_url", "")))
-        self._refresh_ollama_model_choices(str(oc.OLLAMA_MODEL or ""))
-        gpu_mode = _gpu_mode_from_num_gpu(oc.OLLAMA_OPTIONS.get("num_gpu", -1))
-        gpu_idx = self._gpu_mode.findData(gpu_mode)
-        self._gpu_mode.setCurrentIndex(max(0, gpu_idx))
-        self._num_thread.setText(str(oc.OLLAMA_OPTIONS.get("num_thread", 0)))
-        self._api_temperature.setText(str(oc.OLLAMA.get("api_temperature", 0.8)))
-        self._gsv_temperature.setText(str(oc.OLLAMA.get("gsv_temperature", 1.35)))
-        self._gsv_speed_factor.setText(str(oc.OLLAMA.get("gsv_speed_factor", 1.0)))
-        self._ai_voice_max_chars.setText(str(oc.OLLAMA.get("ai_voice_max_chars", 40)))
-        self._memory_context_limit.setText(str(oc.OLLAMA.get("memory_context_limit", _DEFAULT_VALUES["memory_context_limit"])))
-        self._api_enable_thinking.setChecked(bool(oc.OLLAMA.get("api_enable_thinking", False)))
-        self._auto_companion_enabled.setChecked(bool(oc.AUTO_COMPANION.get("enabled", True)))
-
-        mode_value = str(oc.FORCE_REPLY_MODE or "").strip()
-        idx = self._force_mode.findData(mode_value)
-        self._force_mode.setCurrentIndex(max(0, idx))
+        self._set_values_to_form(load_ai_values(_DEFAULT_VALUES))
         self._load_config_tab_values()
 
     def show_centered(self) -> None:
@@ -3445,7 +3356,7 @@ class AISettingsPanel(QWidget):
 
     def _collect_values(self) -> dict:
         force_mode = str(self._force_mode.currentData() or "").strip()
-        if force_mode not in ("", "0", "2", "3"):
+        if force_mode not in ("", "0", "2", "3", "4"):
             raise ValueError("回复模式值无效")
 
         gpu_mode = str(self._gpu_mode.currentData() or _GPU_MODE_AUTO)
@@ -3498,6 +3409,15 @@ class AISettingsPanel(QWidget):
             "force_reply_mode": force_mode,
             "api_base_url": self._api_base_url.text().strip(),
             "api_model": self._api_model.text().strip(),
+            "yuanbao_login_url": str(_DEFAULT_VALUES.get("yuanbao_login_url", "") or "").strip(),
+            "yuanbao_free_api_enabled": bool(self._yuanbao_free_api_enabled.isChecked()),
+            "yuanbao_hy_source": str(_DEFAULT_VALUES.get("yuanbao_hy_source", "web") or "").strip(),
+            "yuanbao_hy_user": "",
+            "yuanbao_x_uskey": "",
+            "yuanbao_agent_id": str(_DEFAULT_VALUES.get("yuanbao_agent_id", "naQivTmsDa") or "").strip(),
+            "yuanbao_chat_id": self._yuanbao_chat_id.text().strip(),
+            "yuanbao_remove_conversation": bool(self._yuanbao_remove_conversation.isChecked()),
+            "yuanbao_upload_images": bool(self._yuanbao_upload_images.isChecked()),
             "ollama_base_url": self._ollama_base_url.text().strip(),
             "ollama_model": self._ollama_model.currentText().strip(),
             "num_gpu": num_gpu,
@@ -3517,6 +3437,15 @@ class AISettingsPanel(QWidget):
         self._api_key.set_raw_text(str(values.get("api_key", "")))
         self._api_base_url.setText(str(values.get("api_base_url", "")))
         self._api_model.setText(str(values.get("api_model", "")))
+        self._yuanbao_login_url_value = str(_DEFAULT_VALUES.get("yuanbao_login_url", ""))
+        self._yuanbao_free_api_enabled.setChecked(bool(values.get("yuanbao_free_api_enabled", False)))
+        self._yuanbao_hy_source_value = str(_DEFAULT_VALUES.get("yuanbao_hy_source", "web"))
+        self._yuanbao_hy_user_value = ""
+        self._yuanbao_x_uskey_value = ""
+        self._yuanbao_agent_id_value = str(_DEFAULT_VALUES.get("yuanbao_agent_id", "naQivTmsDa"))
+        self._yuanbao_chat_id.setText(str(values.get("yuanbao_chat_id", "")))
+        self._yuanbao_remove_conversation.setChecked(bool(values.get("yuanbao_remove_conversation", False)))
+        self._yuanbao_upload_images.setChecked(bool(values.get("yuanbao_upload_images", True)))
         self._ollama_base_url.setText(str(values.get("ollama_base_url", "")))
         self._refresh_ollama_model_choices(str(values.get("ollama_model", "")))
         gpu_mode = _gpu_mode_from_num_gpu(values.get("num_gpu", -1))
@@ -3577,31 +3506,29 @@ class AISettingsPanel(QWidget):
             "max": max_tick,
         }))
 
-    def _on_update_gsv_service(self) -> None:
-        try:
-            from lib.script.gsvmove import get_gsvmove_service
+    def _on_check_updates(self) -> None:
+        if self._checking_updates:
+            self._emit_info("正在检查更新，请稍候...", min_tick=12, max_tick=140)
+            return
 
-            service = get_gsvmove_service()
-            deployed = service.deploy_bundled_update_scripts()
-            if deployed is None:
-                self._emit_info("未找到GSV服务目录，请先确认已正确安装 GSV 服务。", min_tick=14, max_tick=120)
-                return
+        def info_callback(message: str) -> None:
+            self._emit_info(message, min_tick=12, max_tick=160)
 
-            gsv_root, install_bat = deployed
-            service.shutdown_service_process()
-            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-            subprocess.Popen(
-                ["cmd.exe", "/k", str(install_bat)],
-                cwd=str(gsv_root),
-                creationflags=creationflags,
-            )
-            self._emit_info("已替换 GSV 更新脚本，并打开更新命令行。", min_tick=10, max_tick=100)
-        except FileNotFoundError as e:
-            _logger.error("GSV update scripts missing: %s", e)
-            self._emit_info(f"更新失败: {e}", min_tick=18, max_tick=180)
-        except Exception as e:
-            _logger.error("Failed to launch GSV updater: %s", e)
-            self._emit_info(f"更新失败: {e}", min_tick=18, max_tick=180)
+        def worker() -> None:
+            manager = UpdateManager(info_callback=info_callback)
+            try:
+                manager.check_and_update()
+            except UpdateError as exc:
+                self._emit_info(f"检查更新失败: {exc}", min_tick=18, max_tick=200)
+            except Exception as exc:  # pragma: no cover - 防御性日志
+                _logger.error("Unhandled update exception: %s", exc)
+                self._emit_info(f"检查更新失败: {exc}", min_tick=18, max_tick=200)
+            finally:
+                self._set_check_updates_busy(False)
+
+        self._set_check_updates_busy(True)
+        self._emit_info("正在通过 GitHub 检查更新...", min_tick=12, max_tick=160)
+        threading.Thread(target=worker, daemon=True, name="ai-update-check").start()
 
     def _on_restore_defaults(self) -> None:
         self._set_values_to_form(_DEFAULT_VALUES)
@@ -3618,11 +3545,11 @@ class AISettingsPanel(QWidget):
         try:
             ai_values = self._collect_values()
             general_values = self._collect_all_general_config_values()
-            _save_ollama_config(ai_values)
+            save_ai_values(ai_values, _DEFAULT_VALUES)
             _save_general_config(general_values)
             if self._reset_shared_on_next_save:
                 _reset_shared_core_configs_from_project()
-            _apply_runtime(ai_values)
+            apply_ai_runtime(ai_values, _DEFAULT_VALUES)
             _apply_general_runtime(general_values)
             self._apply_all_external_config_fields()
             self._reset_shared_on_next_save = False

@@ -119,6 +119,10 @@ class EventType(Enum):
     MUSIC_LOGIN_QR_STATUS = "music_login_qr_status"  # 更新二维码登录UI状态文字
     MUSIC_LOGIN_QR_HIDE = "music_login_qr_hide"  # 隐藏二维码登录UI
 
+    YUANBAO_LOGIN_QR_SHOW = "yuanbao_login_qr_show"  # 显示元宝二维码登录UI
+    YUANBAO_LOGIN_QR_STATUS = "yuanbao_login_qr_status"  # 更新元宝二维码登录UI状态文字
+    YUANBAO_LOGIN_QR_HIDE = "yuanbao_login_qr_hide"  # 隐藏元宝二维码登录UI
+
     # 音响窗口范围请求和响应事件
     SPEAKER_WINDOW_REQUEST = "speaker_window_request"  # 请求音响窗口范围
     SPEAKER_WINDOW_RESPONSE = "speaker_window_response"  # 响应音响窗口范围

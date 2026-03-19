@@ -331,6 +331,25 @@ class TrayIcon(QObject):
         }))
         QTimer.singleShot(120, self.quit_requested.emit)
 
+    def begin_shutdown(self):
+        """立即隐藏托盘相关 UI，完整释放仍由 cleanup() 负责。"""
+        self._stop_retry()
+        if self._menu is not None:
+            try:
+                self._menu.hide()
+            except Exception:
+                pass
+        if self._ai_settings_panel is not None:
+            try:
+                self._ai_settings_panel.hide()
+            except Exception:
+                pass
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.hide()
+            except Exception:
+                pass
+
     def _on_cleanup_desktop(self):
         """处理清理桌面动作"""
         self._event_center.publish(Event(EventType.INPUT_HASH, {

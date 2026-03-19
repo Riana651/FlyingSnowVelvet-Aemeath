@@ -1,4 +1,4 @@
-# 飞行雪绒 LTS 1.0.5 beta 9
+# 飞行雪绒 LTS 1.0.5 pre1
 
 跨平台桌面宠物（主打 Windows 10/11）与音乐 / AI 伴聊一体化体验，基于 PyQt5、事件总线与动态插件体系构建。当前版本聚焦于稳定性和运行时瘦身，兼容本地 Ollama、大模型 OpenAI 兼容 API 以及规则回复降级。
 
@@ -8,7 +8,7 @@
 
 ## 功能速览
 
-- **AI 伴聊与工具调度**：`lib/script/chat` 统一了本地 Ollama、OpenAI 兼容 API 以及规则回复模式，并通过 `lib/script/tool_dispatcher` 将模型输出中的 `###指令###` 转译为宠物命令（音乐、音量、闹钟、雪豹/沙发/摩托等对象生成、清理、瞬移、回忆等）。
+- **AI 伴聊与工具调度**：`lib/script/chat` 统一了本地 Ollama、OpenAI 兼容 API、YuanBao-Free-API 本地中转服务以及规则回复模式，并通过 `lib/script/tool_dispatcher` 将模型输出中的 `###指令###` 转译为宠物命令（音乐、音量、闹钟、雪豹/沙发/摩托等对象生成、清理、瞬移、回忆等）。
 - **语音 / 语音识别**：`lib/script/voice` 为声音请求抽象层，`lib/script/gsvmove` 桥接 GSVmove TTS，`lib/script/microphone_stt` 负责本地 Vosk 识别（含 Push-to-Talk 管理器、ASCII 目录镜像、静音检测）。`config/config_voice.py` 定义运行参数。
 - **音乐系统**：`lib/script/cloudmusic` orchestrator 对接 `NetEase / QQ / Kugou`，由 `lib/script/music/providers/*` 提供统一 adapter；窗口 UI（播放队列 / 搜索 / 控制按钮）位于 `lib/script/ui`。事件在 `EventType.MUSIC_*` 命名空间中解耦。
 - **动态插件世界**：管理器放在 `lib/script/obj-*`（雪豹、雪堆、沙发、摩托、闹钟、音响），粒子脚本在 `lib/script/practical/*_particle.py`。`lib/core/plugin_registry.py` 承担发现、注册、初始化、清理。
@@ -45,7 +45,7 @@
 1. 安装 Python 3.7~3.13（推荐 3.10+，可直接用系统 `py` 启动器）。
 2. 克隆/下载仓库后运行 `安装依赖.bat`（或 `python install_deps.py`）。脚本会：
    - 发现可用 Python 并写入 `py.ini`（路径采用 ASCII 安全形式）；
-   - 自动安装 `requirements.txt` 中的依赖；
+   - 自动安装 `requirements.txt` 中的依赖，并优先解压仓库内置的 `services/bundles/yuanbao-free-api-main.zip`；
    - 下载 Vosk 中/英文模型到 `resc/models/`（若 `sounddevice+vosk` 就绪）；
    - 启动 `lib/core/qt_desktop_pet.py` 背景进程。
 3. 右键宠物打开命令框：`/cmd` 执行 shell、`#命令` 操作管理器、普通文本聊天。
@@ -62,7 +62,7 @@ python lib/core/qt_desktop_pet.py
 ```
 
 - `scripts/generate_doc_portal.py` 生成带样式的资料舱 HTML。
-- `scripts/package_release.py --version LTS1.0.5beta9` 会在 `dist/` 产出瘦身 zip（排除日志、用户数据、Vosk 模型等），详见下文。
+- `scripts/package_release.py --version LTS1.0.5pre1` 会在 `dist/` 产出瘦身 zip（排除日志、用户数据、Vosk 模型等），详见下文。
 - `logs/` 自动滚动保留最近 5 份，`logs/app_*.log` 便于排查。
 
 ---
@@ -71,8 +71,9 @@ python lib/core/qt_desktop_pet.py
 
 ### AI / 大模型
 
-- `config/ollama_config.py` 负责选择 **OpenAI 兼容 API** 与本地 **Ollama**。默认会尝试从以下环境变量加载密钥：`FLYINGSNOWVELVET_API_KEY`、`FLYINGSNOW_API_KEY`、`OPENAI_API_KEY`。若没有设置，`API_KEY` 为空，可在 AI 设置面板或直接编辑配置文件。
-- `FORCE_REPLY_MODE` 支持：`''` 自动、`'0'` 强制外部 API、`'2'` 本地 Ollama、`'3'` 规则回复。
+- `config/ollama_config.py` 负责选择 **OpenAI 兼容 API** 与本地 **Ollama**。默认会尝试从以下环境变量加载密钥：`FLYINGSNOWVELVET_API_KEY`、`FLYINGSNOW_API_KEY`、`OPENAI_API_KEY`。仓库默认不内置任何密钥；若没有设置，`API_KEY` 保持为空，可在 AI 设置面板或直接编辑本地配置文件。
+- 若启用 `YuanBao-Free-API` 且接口地址指向 `http://127.0.0.1:8000/v1`，桌宠会在启动时自动解压并拉起仓库内置的本地中转服务；该服务使用 `API_KEY` 作为 Bearer 访问密钥，并在首次启动时生成二维码图片供扫码登录。
+- `FORCE_REPLY_MODE` 支持：`''` 自动、`'0'` 强制外部 API、`'2'` 本地 Ollama、`'3'` 规则回复、`'4'` 优先走 YuanBao-Web。
 - 人格脚本默认 `resc/persona.txt`，可通过 `PERSONA_FILE` 指定自定义文件。
 
 ### 语音与识别
@@ -102,8 +103,9 @@ python lib/core/qt_desktop_pet.py
 ## 脚本与工具
 
 - `scripts/generate_doc_portal.py`：读取 `doc/*.txt` 与贡献/赞助清单，渲染 `AA使用必读.html`。用于 GitHub Release 附件或 wiki。
+- `services/bundles/yuanbao-free-api-main.zip`：内置的 `chenwr727/yuanbao-free-api` 源码压缩包；`install_deps.py` 与桌宠启动时会优先使用它准备本地中转服务。
 - `scripts/package_release.py`：
-  - `python scripts/package_release.py --version LTS1.0.5beta9`：产出 `dist/FlyingSnowVelvet-LTS1.0.5beta9.zip`；
+  - `python scripts/package_release.py --version LTS1.0.5pre1`：产出 `dist/FlyingSnowVelvet-LTS1.0.5pre1.zip`；
   - `--dry-run`：仅打印将被打包的文件，CI 用于校验；
   - 自动排除 `logs/`、`resc/models/`、`resc/user/`、`__pycache__/`、`.git/`、`.github/` 等运行时或仓库文件，并写入 `.keep` 占位符确保必要目录存在。
 
@@ -146,7 +148,7 @@ GitHub Actions (`.github/workflows/ci.yml`) 会在 Windows 环境安装依赖并
 
 ## 版本与路线图
 
-当前版本：`LTS1.0.5beta9`（2026-03-17）。主要变更请查阅 [CHANGELOG.md](CHANGELOG.md)。迁移计划仍在 Phase 8，优先清理旧结构、瘦身 orchestrator、拆分 `install_deps.py`。
+当前版本：`LTS1.0.5pre1`（2026-03-18）。主要变更请查阅 [CHANGELOG.md](CHANGELOG.md)。迁移计划仍在 Phase 8，优先清理旧结构、瘦身 orchestrator、拆分 `install_deps.py`。
 
 ---
 

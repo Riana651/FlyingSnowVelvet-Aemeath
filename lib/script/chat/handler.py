@@ -61,7 +61,6 @@ class ChatHandler(ChatHandlerPersonaMixin, ChatHandlerAutoCompanionMixin, ChatHa
                 "min":  BUBBLE_MIN_TICKS,
                 "max":  BUBBLE_MAX_TICKS,
             }))
-            self._event_center.publish(Event(EventType.STREAM_FINAL, {"text": mode_error}))
             logger.error("[ChatHandler] 强制模式失败，已停止回退: %s", mode_error)
             return
 

@@ -9,7 +9,8 @@
    - python_executable
    - pythonw_executable
 5. 下载 Vosk 中/英文模型到 resc/models/vosk-model-small-*/.
-6. 启动主程序.
+6. 准备 yuanbao-free-api 本地中转服务及其依赖.
+7. 启动主程序.
 """
 
 import configparser
@@ -24,6 +25,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 PROJECT_ROOT = Path(__file__).parent
 
@@ -46,6 +48,8 @@ DEPENDENCIES = [
     # (pip package, description, import checks)
     ("PyQt5", "Qt GUI framework", ("PyQt5",)),
     ("Pillow", "image processing", ("PIL",)),
+    ("packaging", "version / requirement parsing helpers", ("packaging",)),
+    ("playwright", "browser automation for YuanBao login capture", ("playwright",)),
     ("pygame", "audio playback", ("pygame",)),
     ("requests", "HTTP client", ("requests",)),
     ("musicdl", "Kugou fallback parser", ("musicdl",)),
@@ -59,7 +63,17 @@ DEPENDENCIES = [
     ("vosk", "offline speech-to-text engine", ("vosk",)),
 ]
 
-TOTAL_STEPS = 5
+TOTAL_STEPS = 6
+
+YUANBAO_SERVICE_REPO_ZIP = "https://github.com/chenwr727/yuanbao-free-api/archive/refs/heads/main.zip"
+YUANBAO_SERVICE_REPO_ZIP_FALLBACKS = (
+    YUANBAO_SERVICE_REPO_ZIP,
+    "https://codeload.github.com/chenwr727/yuanbao-free-api/zip/refs/heads/main",
+)
+YUANBAO_SERVICE_BUNDLED_ZIP = PROJECT_ROOT / "services" / "bundles" / "yuanbao-free-api-main.zip"
+YUANBAO_SERVICE_DIR = PROJECT_ROOT / "services" / "yuanbao-free-api"
+YUANBAO_SERVICE_REQUIRED_FILES = ("app.py", "requirements.txt")
+YUANBAO_SERVICE_BROWSER = "chromium"
 
 
 def _enable_ansi_color() -> bool:
@@ -660,7 +674,151 @@ def _cleanup_vosk_temp_artifacts(archive_path, part_path, extract_root, *, ignor
     _unlink_if_exists(archive_path, ignore_errors=ignore_errors)
 
 
-def _stream_download_with_progress(url, dest_path, *, label, timeout=30, chunk_size=256 * 1024):
+def _service_bundle_ready(service_dir: Path, required_files) -> bool:
+    if not service_dir.exists() or not service_dir.is_dir():
+        return False
+    for name in required_files:
+        if not (service_dir / name).exists():
+            return False
+    return True
+
+
+def _find_bundle_root(extract_root: Path, required_files) -> Optional[Path]:
+    candidates = [extract_root]
+    candidates.extend(path for path in extract_root.iterdir() if path.is_dir())
+    for candidate in candidates:
+        if all((candidate / name).exists() for name in required_files):
+            return candidate
+    for candidate in extract_root.rglob('*'):
+        if candidate.is_dir() and all((candidate / name).exists() for name in required_files):
+            return candidate
+    return None
+
+
+def _download_yuanbao_service_bundle() -> bool:
+    if _service_bundle_ready(YUANBAO_SERVICE_DIR, YUANBAO_SERVICE_REQUIRED_FILES):
+        print(f"  已存在服务目录: {YUANBAO_SERVICE_DIR}")
+        return True
+
+    def _install_from_archive(archive_path: Path, source_text: str) -> bool:
+        temp_root = Path(os.environ.get("TEMP", "C:\\Temp")) / "fsv_yuanbao_bundle"
+        extract_root = temp_root / "extract"
+        _rmtree_if_exists(temp_root, ignore_errors=True)
+        temp_root.mkdir(parents=True, exist_ok=True)
+        try:
+            print(f"  使用 {source_text} 准备 yuanbao-free-api 服务包...")
+            extract_root.mkdir(parents=True, exist_ok=True)
+            _extract_zip_with_progress(archive_path, extract_root)
+            bundle_root = _find_bundle_root(extract_root, YUANBAO_SERVICE_REQUIRED_FILES)
+            if bundle_root is None:
+                raise RuntimeError('服务包中未找到 app.py / requirements.txt')
+            _rmtree_if_exists(YUANBAO_SERVICE_DIR, ignore_errors=True)
+            YUANBAO_SERVICE_DIR.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(bundle_root), str(YUANBAO_SERVICE_DIR))
+            print(f"  已安装到: {YUANBAO_SERVICE_DIR}")
+            return True
+        except Exception as exc:
+            _print_warn(f"  安装 yuanbao-free-api 服务包失败 [{source_text}]: {exc}")
+            return False
+        finally:
+            _rmtree_if_exists(temp_root, ignore_errors=True)
+
+    if YUANBAO_SERVICE_BUNDLED_ZIP.exists():
+        if _install_from_archive(YUANBAO_SERVICE_BUNDLED_ZIP, "仓库内置压缩包"):
+            return True
+
+    temp_root = Path(os.environ.get("TEMP", "C:\\Temp")) / "fsv_yuanbao_bundle"
+    archive_path = temp_root / "yuanbao-free-api-main.zip"
+    _rmtree_if_exists(temp_root, ignore_errors=True)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    try:
+        print("  下载 yuanbao-free-api 服务包...")
+        last_error = None
+        for idx, url in enumerate(YUANBAO_SERVICE_REPO_ZIP_FALLBACKS, start=1):
+            _unlink_if_exists(archive_path, ignore_errors=True)
+            use_env_proxy = idx == 1
+            source_name = f"yuanbao-free-api#{idx}"
+            try:
+                _stream_download_with_progress(
+                    url,
+                    archive_path,
+                    label=source_name,
+                    use_env_proxy=use_env_proxy,
+                )
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                proxy_mode = "系统代理" if use_env_proxy else "直连(禁用代理)"
+                _print_warn(f"  下载源失败 [{proxy_mode}] {url}: {exc}")
+        if last_error is not None:
+            raise last_error
+        return _install_from_archive(archive_path, '在线下载压缩包')
+    except Exception as e:
+        _print_warn(f"  下载/解压 yuanbao-free-api 失败: {e}")
+        return False
+    finally:
+        _rmtree_if_exists(temp_root, ignore_errors=True)
+
+
+def _install_requirements_file(python_exe, requirements_path: Path, mirrors) -> bool:
+    if not requirements_path.exists():
+        _print_warn(f"  requirements 文件不存在: {requirements_path}")
+        return False
+    for i, mirror in enumerate(mirrors):
+        label = "primary" if i == 0 else f"backup{i}"
+        print(f"  [{label}] 安装服务依赖 {requirements_path.name} via {mirror['name']} ...", end=" ", flush=True)
+        r = _run_pip(
+            python_exe,
+            "install",
+            "-r",
+            str(requirements_path),
+            "-i",
+            mirror["url"],
+            "--trusted-host",
+            mirror["host"],
+            "--no-warn-script-location",
+            timeout=600,
+        )
+        if r and r.returncode == 0:
+            print("ok")
+            return True
+        print("failed, switching")
+    return False
+
+
+def _ensure_playwright_browser(python_exe) -> bool:
+    print(f"  安装 Playwright 浏览器运行时 ({YUANBAO_SERVICE_BROWSER}) ...", end=" ", flush=True)
+    r = _run_python_module(python_exe, "playwright", "install", YUANBAO_SERVICE_BROWSER, timeout=1200)
+    if r and r.returncode == 0:
+        print("ok")
+        return True
+    print("failed")
+    return False
+
+
+def ensure_yuanbao_service_bundle(python_exe, mirrors) -> bool:
+    _print_stage(5, "准备 YuanBao-Free-API 本地中转服务...")
+    bundle_ok = _download_yuanbao_service_bundle()
+    if not bundle_ok:
+        return False
+
+    requirements_ok = _install_requirements_file(
+        python_exe,
+        YUANBAO_SERVICE_DIR / "requirements.txt",
+        mirrors,
+    )
+    if not requirements_ok:
+        _print_warn("  YuanBao-Free-API 依赖安装失败，元宝 web 模式可能不可用")
+
+    browser_ok = _ensure_playwright_browser(python_exe)
+    if not browser_ok:
+        _print_warn("  Playwright Chromium 安装失败，自动抓取登录态功能可能不可用")
+
+    return bundle_ok and requirements_ok
+
+
+def _stream_download_with_progress(url, dest_path, *, label, timeout=30, chunk_size=256 * 1024, use_env_proxy=True):
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     _unlink_if_exists(dest_path)
 
@@ -671,11 +829,13 @@ def _stream_download_with_progress(url, dest_path, *, label, timeout=30, chunk_s
             "Accept": "application/zip, application/octet-stream, */*",
         },
     )
-    print(f"    source: {label}")
+    proxy_text = "env-proxy" if use_env_proxy else "direct"
+    print(f"    source: {label} ({proxy_text})")
 
     start_time = time.perf_counter()
     last_draw = 0.0
-    with urllib.request.urlopen(request, timeout=timeout) as response, open(dest_path, "wb") as fp:
+    opener = urllib.request.build_opener() if use_env_proxy else urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=timeout) as response, open(dest_path, "wb") as fp:
         total_header = response.headers.get("Content-Length")
         total = int(total_header) if total_header and total_header.isdigit() else 0
         current = 0
@@ -800,7 +960,7 @@ def ensure_vosk_models():
 
 def launch(python_exe):
     """Launch main script, prefer pythonw if available."""
-    _print_stage(5, "启动飞行雪绒桌宠...")
+    _print_stage(6, "启动飞行雪绒桌宠...")
 
     main_script = PROJECT_ROOT / "lib" / "core" / "qt_desktop_pet.py"
     if not main_script.exists():
@@ -854,6 +1014,9 @@ def main():
                 _print_warn("部分 Vosk 模型缺失，语音识别可能无法正常工作")
         else:
             _print_stage(4, "跳过 Vosk 模型下载（sounddevice/vosk 未就绪）")
+
+        if not ensure_yuanbao_service_bundle(python_exe, mirrors):
+            _print_warn("YuanBao-Free-API 本地中转未准备完成，元宝 web 模式可能不可用")
 
 
         if launch(python_exe):

@@ -72,7 +72,7 @@ def _generate_portal() -> str:
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     image_rel = _relative_href(IMAGE_PATH)
-    hero_subtitle = "贡献 + 赞助 + 文档 · LTS1.0.5beta9"
+    hero_subtitle = "贡献 + 赞助 + 文档 · LTS1.0.5pre1"
     harmony_font = "resc/FRONTS/HarmonyOS_Sans_SC_Bold.ttf"
     lahairoi_font = "resc/FRONTS/WuWa%20Lahai-Roi%20Regular.ttf"
 
@@ -81,7 +81,7 @@ def _generate_portal() -> str:
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>飞行雪绒资料舱 · LTS1.0.5beta9</title>
+    <title>飞行雪绒资料舱 · LTS1.0.5pre1</title>
     <style>
         @font-face {{
             font-family: 'HarmonyOS Sans';
@@ -330,7 +330,7 @@ def _generate_portal() -> str:
             </div>
         </section>
     </main>
-    <footer>由飞行雪绒 LTS1.0.5beta9 代码生成 · 粉粉青青也是科技感 (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧</footer>
+    <footer>由飞行雪绒 LTS1.0.5pre1 代码生成 · 粉粉青青也是科技感 (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧</footer>
     <script>
     (() => {{
         const letters = "FLYINGSNOWVELVET";

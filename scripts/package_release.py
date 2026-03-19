@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_VERSION = "LTS1.0.5beta9"
+DEFAULT_VERSION = "LTS1.0.5pre1"
 DIST_DIR = ROOT / "dist"
 
 EXCLUDE_PART_NAMES = {
@@ -49,6 +49,14 @@ EXCLUDE_SUFFIXES = {
     ".tmp",
     ".part",
     ".bak",
+}
+
+
+ROOT_ARCHIVE_SUFFIXES = {
+    ".zip",
+    ".7z",
+    ".tar",
+    ".gz",
 }
 
 EXCLUDE_FILE_NAMES = {
@@ -87,6 +95,8 @@ def _should_exclude(path: Path) -> bool:
         if _is_under(rel, prefix):
             return True
     if rel.name in EXCLUDE_FILE_NAMES:
+        return True
+    if rel.parent == Path('.') and path.suffix.lower() in ROOT_ARCHIVE_SUFFIXES:
         return True
     if path.suffix.lower() in EXCLUDE_SUFFIXES:
         return True
