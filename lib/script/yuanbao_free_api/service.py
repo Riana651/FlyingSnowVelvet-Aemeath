@@ -509,6 +509,7 @@ class YuanbaoFreeApiService:
         return result
 
     def begin_login_flow(self) -> Dict[str, object]:
+        _remove_qrcode_if_exists()
         self._publish_login_dialog_show({'last_message': 'starting_login'})
         target = _parse_local_target()
         if target is None:

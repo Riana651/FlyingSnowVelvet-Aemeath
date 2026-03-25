@@ -1,6 +1,5 @@
 """OpenAI ?? API ?????"""
 
-import base64
 import json
 import threading
 import time
@@ -9,7 +8,7 @@ import requests
 
 from lib.core.logger import get_logger
 
-from ._multimodal import images_to_openai_content
+from ._multimodal import image_to_base64, images_to_openai_content
 from .api_client_common import _ApiClientCommonMixin
 from .api_client_error import _ApiClientErrorMixin
 
@@ -251,8 +250,8 @@ class _ApiClientOpenAIMixin(_ApiClientCommonMixin, _ApiClientErrorMixin):
             payload = {
                 'file': {
                     'file_type': 'image',
-                    'file_name': f'snowrol_{idx}.png',
-                    'file_data': base64.b64encode(image_bytes).decode('ascii'),
+                    'file_name': f'snowrol_{idx}.jpg',
+                    'file_data': image_to_base64(image_bytes),
                 },
             }
             last_error: Exception | None = None

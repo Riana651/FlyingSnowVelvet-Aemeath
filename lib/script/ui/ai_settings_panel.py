@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import ctypes
 import json
 import math
 import os
@@ -823,6 +824,75 @@ def _to_int(value) -> int:
         return 0
 
 
+class _MEMORYSTATUSEX(ctypes.Structure):
+    _fields_ = [
+        ('dwLength', ctypes.c_ulong),
+        ('dwMemoryLoad', ctypes.c_ulong),
+        ('ullTotalPhys', ctypes.c_ulonglong),
+        ('ullAvailPhys', ctypes.c_ulonglong),
+        ('ullTotalPageFile', ctypes.c_ulonglong),
+        ('ullAvailPageFile', ctypes.c_ulonglong),
+        ('ullTotalVirtual', ctypes.c_ulonglong),
+        ('ullAvailVirtual', ctypes.c_ulonglong),
+        ('ullAvailExtendedVirtual', ctypes.c_ulonglong),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.dwLength = ctypes.sizeof(self)
+
+
+def _get_total_memory_bytes() -> int:
+    try:
+        memory_status = _MEMORYSTATUSEX()
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory_status)):
+            total = int(memory_status.ullTotalPhys)
+            if total > 0:
+                return total
+    except Exception:
+        pass
+    return 0
+
+
+def _is_virtual_or_software_gpu(name: str) -> bool:
+    text = str(name or '').strip().lower()
+    if not text:
+        return True
+    virtual_keywords = (
+        'microsoft basic',
+        'basic render',
+        'indirect display',
+        'idd',
+        'displaylink',
+        'mirror driver',
+        'remote display',
+        'virtual',
+        'vmware',
+        'hyper-v',
+        'virtio',
+        'citrix',
+        'parsec',
+        'asklink',
+    )
+    return any(keyword in text for keyword in virtual_keywords)
+
+
+def _gpu_pick_score(item: dict) -> tuple[int, int, int]:
+    name = str(item.get('Name') or '').strip().lower()
+    ram = _to_int(item.get('AdapterRAM'))
+    if _is_virtual_or_software_gpu(name):
+        return 0, 0, ram
+    if any(keyword in name for keyword in ('nvidia', 'geforce', 'rtx', 'gtx', 'quadro', 'tesla')):
+        vendor_rank = 3
+    elif any(keyword in name for keyword in ('amd', 'radeon', 'rx ', 'vega', 'firepro')):
+        vendor_rank = 2
+    elif any(keyword in name for keyword in ('intel', 'arc', 'iris', 'uhd', 'hd graphics')):
+        vendor_rank = 1
+    else:
+        vendor_rank = 1 if name else 0
+    return 1, vendor_rank, ram
+
+
 def _format_gb_text(byte_value: int | None) -> str:
     value = int(byte_value or 0)
     gib = value / (1024 ** 3)
@@ -834,6 +904,7 @@ def _query_hardware_watermark_lines() -> tuple[str, str]:
     fallback_line1 = "UnKnow GPU 0.00 GB"
     fallback_line2 = "RAM 0.00 GB"
     try:
+        total_memory = _get_total_memory_bytes()
         cmd = [
             _get_powershell_executable(),
             "-NoProfile",
@@ -843,19 +914,21 @@ def _query_hardware_watermark_lines() -> tuple[str, str]:
             "$ErrorActionPreference='SilentlyContinue'; "
             "$g=Get-CimInstance Win32_VideoController | Where-Object { $_.Name } | "
             "Select-Object Name,@{Name='AdapterRAM';Expression={[UInt64]($_.AdapterRAM)}}; "
-            "$ram=[UInt64]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory); "
-            "@{gpus=$g; ram=$ram} | ConvertTo-Json -Compress",
+            "@{gpus=$g} | ConvertTo-Json -Compress",
         ]
-        rc, stdout, _stderr = _run_capture_text(cmd, timeout=3)
+        rc, stdout, _stderr = _run_capture_text(cmd, timeout=5)
         if rc != 0:
-            return fallback_line1, fallback_line2
+            ram_text = _format_gb_text(total_memory)
+            return fallback_line1, f"RAM {ram_text}"
         payload = (stdout or "").strip()
         if not payload:
-            return fallback_line1, fallback_line2
+            ram_text = _format_gb_text(total_memory)
+            return fallback_line1, f"RAM {ram_text}"
 
         parsed = json.loads(payload)
         if not isinstance(parsed, dict):
-            return fallback_line1, fallback_line2
+            ram_text = _format_gb_text(total_memory)
+            return fallback_line1, f"RAM {ram_text}"
 
         raw_items = parsed.get("gpus")
         if isinstance(raw_items, dict):
@@ -865,17 +938,14 @@ def _query_hardware_watermark_lines() -> tuple[str, str]:
         else:
             items = []
         if not items:
-            return fallback_line1, fallback_line2
+            ram_text = _format_gb_text(total_memory)
+            return fallback_line1, f"RAM {ram_text}"
 
-        def _score(item: dict) -> tuple[int, int]:
-            name = str(item.get("Name") or "").strip().lower()
-            is_non_intel = 1 if ("intel" not in name and name) else 0
-            return is_non_intel, _to_int(item.get("AdapterRAM"))
-
-        picked = max(items, key=_score)
+        filtered_items = [item for item in items if _gpu_pick_score(item)[0] > 0]
+        picked = max(filtered_items or items, key=_gpu_pick_score)
         model = str(picked.get("Name") or "").strip() or "UnKnow GPU"
         vram_text = _format_gb_text(_to_int(picked.get("AdapterRAM")))
-        ram_text = _format_gb_text(_to_int(parsed.get("ram")))
+        ram_text = _format_gb_text(total_memory)
         return f"{model} {vram_text}", f"RAM {ram_text}"
     except Exception:
         return fallback_line1, fallback_line2
@@ -1248,10 +1318,12 @@ class AISettingsPanel(QWidget):
         self._content_width = scale_px(470, min_abs=420)
         self._content_height = _CONTROL_PANEL_CONTENT_HEIGHT
         self._reset_shared_on_next_save = False
+        self._stable_window_size: tuple[int, int] | None = None
 
         self._build_ui()
         self._apply_project_fonts()
         self._apply_style()
+        self._cache_stable_window_size()
         self.load_values()
 
     def _add_panel_title_row(self, layout: QVBoxLayout, title_text: str, hint_text: str) -> tuple[QLabel, QLabel]:
@@ -2239,14 +2311,36 @@ class AISettingsPanel(QWidget):
                 status = status if isinstance(status, dict) else {}
                 logged_in = bool(result.get('logged_in') or status.get('logged_in')) if isinstance(result, dict) else False
                 qrcode_ready = bool(result.get('qrcode_exists') or status.get('qrcode_exists')) if isinstance(result, dict) else False
+                login_in_progress = bool(result.get('login_in_progress') or status.get('login_in_progress')) if isinstance(result, dict) else False
                 message = str((result or {}).get('message') or '').strip() if isinstance(result, dict) else ''
                 last_error = str(status.get('last_error') or '').strip()
-                stage = self._describe_yuanbao_stage(str(status.get('last_message') or '').strip())
+                raw_stage = str(status.get('last_message') or '').strip()
+                stage = self._describe_yuanbao_stage(raw_stage)
+                stage_in_progress = raw_stage in {
+                    'starting_login',
+                    'starting_playwright',
+                    'launching_browser',
+                    'creating_page',
+                    'page_loading',
+                    'page_loaded',
+                    'browser_initialized',
+                    'dismissing_dialog',
+                    'resolving_login_button',
+                    'waiting_login_button',
+                    'clicking_login_button',
+                    'login_button_clicked',
+                    'waiting_qrcode',
+                    'refreshing_qrcode',
+                    'waiting_scan_confirm',
+                }
 
                 if logged_in:
                     self._emit_info("元宝已登录，本地服务可直接使用。", min_tick=14, max_tick=120)
                 elif qrcode_ready:
                     self._emit_info("元宝二维码已生成，请在弹出的二维码窗口中扫码登录。", min_tick=16, max_tick=180)
+                elif login_in_progress or (not last_error and stage_in_progress):
+                    detail = stage or message or '正在继续初始化元宝登录流程'
+                    self._emit_info(f"元宝登录流程已启动：{detail}", min_tick=14, max_tick=180)
                 else:
                     log_path = get_yuanbao_free_api_log_path()
                     detail = last_error or stage or message or f'请查看 {log_path.name}'
@@ -3212,6 +3306,21 @@ class AISettingsPanel(QWidget):
     def _on_top_tab_changed(self, index: int) -> None:
         set_active_ai_settings_tab(self, index)
 
+    def _cache_stable_window_size(self) -> tuple[int, int]:
+        ai_panel = getattr(self, "_ai_panel", None)
+        restore_visible = bool(ai_panel is not None and ai_panel.isVisible())
+        if ai_panel is not None:
+            ai_panel.show()
+
+        self.adjustSize()
+        target_w = max(self.minimumWidth(), int(round(self.width() * _PANEL_SCALE)))
+        target_h = max(self.minimumHeight(), int(round(self.height() * _PANEL_SCALE)))
+        self._stable_window_size = (target_w, target_h)
+
+        if ai_panel is not None and not restore_visible:
+            ai_panel.hide()
+        return self._stable_window_size
+
     def load_values(self) -> None:
         self._reset_shared_on_next_save = False
         self._set_values_to_form(load_ai_values(_DEFAULT_VALUES))
@@ -3230,9 +3339,7 @@ class AISettingsPanel(QWidget):
         if target_panel is not None:
             # 在布局测量前确保目标面板可见，避免上次停留在其它标签页后被隐藏导致尺寸被压缩。
             target_panel.show()
-        self.adjustSize()
-        target_w = max(self.minimumWidth(), int(round(self.width() * _PANEL_SCALE)))
-        target_h = max(self.minimumHeight(), int(round(self.height() * _PANEL_SCALE)))
+        target_w, target_h = self._stable_window_size or self._cache_stable_window_size()
         self.resize(target_w, target_h)
 
         app = QApplication.instance()

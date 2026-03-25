@@ -152,6 +152,8 @@ class YuanbaoLoginDialog(QWidget):
             pix = QPixmap()
             if pix.loadFromData(qr_png, 'PNG') or pix.loadFromData(qr_png):
                 self._qr_pixmap = pix
+        else:
+            self._qr_pixmap = None
         if title:
             self._title = title
         if status:
@@ -202,6 +204,8 @@ class YuanbaoLoginDialog(QWidget):
             pix = QPixmap()
             if pix.loadFromData(qr_png, 'PNG') or pix.loadFromData(qr_png):
                 self._qr_pixmap = pix
+        else:
+            self._qr_pixmap = None
         logged_in = bool(event.data.get('logged_in'))
         self._status = str(event.data.get('status', self._status))
         if logged_in:

@@ -35,7 +35,6 @@ EXCLUDE_PART_NAMES = {
 
 EXCLUDE_PATH_PREFIXES = {
     Path("config") / ".shared_pending",
-    Path("resc") / "playwright" / "browsers",
     Path("resc") / "user",
     Path("resc") / "gsvmove_update",
 }
@@ -59,6 +58,7 @@ ROOT_ARCHIVE_SUFFIXES = {
 
 EXCLUDE_FILE_NAMES = {
     "py.ini",
+    "playwright-chromium-chromium-1208.zip",
 }
 
 PLACEHOLDER_DIRS = (

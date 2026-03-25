@@ -539,12 +539,9 @@ class GsvmoveService:
 
         with self._proc_lock:
             proc = self._process
-            started = self._started_by_app
             self._process = None
             self._started_by_app = False
 
-        if not started:
-            return
         if self._shutdown_started_service(proc):
             return
         logger.warning("[GsvmoveService] 结束 GSVmove 进程失败：常规终止与兜底清理均未成功")
@@ -561,10 +558,8 @@ class GsvmoveService:
         if proc is not None and proc.poll() is None:
             if self._terminate_process_tree(proc.pid, force=False):
                 logger.info("[GsvmoveService] 已结束 GSVmove 后台进程")
-                return True
-            if self._terminate_process_tree(proc.pid, force=True):
+            elif self._terminate_process_tree(proc.pid, force=True):
                 logger.info("[GsvmoveService] 已强制结束 GSVmove 后台进程")
-                return True
 
         fallback_pids = self._find_gsvmove_service_pids()
         if proc is not None and getattr(proc, "pid", None):
@@ -573,8 +568,14 @@ class GsvmoveService:
         for pid in sorted(fallback_pids):
             if self._terminate_process_tree(pid, force=True):
                 logger.info("[GsvmoveService] 已强制结束残留 GSVmove 服务进程 pid=%s", pid)
-                return True
-        return False
+        if proc is not None or fallback_pids:
+            time.sleep(0.8)
+
+        proc_alive = bool(proc is not None and proc.poll() is None)
+        remaining_pids = self._find_gsvmove_service_pids()
+        if proc is not None and getattr(proc, "pid", None):
+            remaining_pids.discard(int(proc.pid))
+        return (not proc_alive) and (not remaining_pids)
 
     def _terminate_process_tree(self, pid: int, force: bool) -> bool:
         try:

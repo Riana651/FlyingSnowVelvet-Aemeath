@@ -45,6 +45,39 @@ def _find_local_playwright_executable() -> Path | None:
     return None
 
 
+def _detect_windows_default_chromium_channel() -> str | None:
+    try:
+        import winreg
+    except Exception:
+        return None
+
+    try:
+        key_path = r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            prog_id = str(winreg.QueryValueEx(key, "ProgId")[0] or "").strip().lower()
+    except Exception:
+        return None
+
+    if not prog_id:
+        return None
+    if prog_id.startswith("msedgehtm") or "edge" in prog_id:
+        return "msedge"
+    if prog_id.startswith("chromehtml") or "chrome" in prog_id:
+        return "chrome"
+    return None
+
+
+def _preferred_chromium_channels() -> tuple[str, ...]:
+    preferred = _detect_windows_default_chromium_channel()
+    ordered: list[str] = []
+    if preferred:
+        ordered.append(preferred)
+    for channel in ("msedge", "chrome"):
+        if channel not in ordered:
+            ordered.append(channel)
+    return tuple(ordered)
+
+
 def _parse_cookie_header(raw: str) -> dict[str, str]:
     cookies: dict[str, str] = {}
     for part in str(raw or '').split(';'):
@@ -237,7 +270,7 @@ def capture_yuanbao_login_state(
                 browser = playwright.chromium.launch(executable_path=str(local_executable), headless=False)
             except Exception as exc:
                 launch_errors.append(f'local:{local_executable}: {exc}')
-        for channel in ('msedge', 'chrome', None):
+        for channel in (*_preferred_chromium_channels(), None):
             if browser is not None:
                 break
             try:
